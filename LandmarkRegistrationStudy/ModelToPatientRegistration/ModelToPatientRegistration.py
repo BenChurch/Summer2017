@@ -1195,17 +1195,37 @@ class IncompleteMarkupsNodeRepairLogic:
     A = [Coords[i][1] for i in range(len(Coords))]
     S = [Coords[i][2] for i in range(len(Coords))]
     
-    S_R_FitCoefs = np.polyfit(S, R, len(S)/2)
-    S_A_FitCoefs = np.polyfit(S, A, len(S)/2)
+    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+
+    S_R_FitCoefs = np.polyfit(S, R, int(len(Coords)/2)-1)
+    S_A_FitCoefs = np.polyfit(S, A, int(len(Coords)/2)-1)
     
     SrPolynomial = np.poly1d(S_R_FitCoefs)
     SaPolynomial = np.poly1d(S_A_FitCoefs)
     
-    print "SR fit:", SrPolynomial
-    print "SA fit:", SaPolynomial
+    #print "SR fit:", SrPolynomial
+    #print "SA fit:", SaPolynomial
     
     if Plot:
-      sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+      OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
+      while OldCharts.GetItemAsObject(0) != None:
+        slicer.mrmlScene.RemoveNode(OldCharts.GetItemAsObject(0))
+        OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
+    
+      OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
+      while OldArrays.GetItemAsObject(0) != None:
+        slicer.mrmlScene.RemoveNode(OldArrays.GetItemAsObject(0))
+        OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
+        
+      #Creates chart view
+      lns = slicer.mrmlScene.GetNodesByClass('vtkMRMLLayoutNode')
+      
+      #Get chart view node
+      cvns = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartViewNode')
+      cvns.InitTraversal()
+      cvn = cvns.GetNextItemAsObject()
+      #Create chart node
+      cna = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
       
       aDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
       aDomain = aDomainNode.GetArray()
@@ -1214,35 +1234,169 @@ class IncompleteMarkupsNodeRepairLogic:
       for i, s in enumerate(sSpace):
         aDomain.SetComponent(i, 0, s)
         aDomain.SetComponent(i, 1, SaPolynomial(s))
+        aDomain.SetComponent(i, 2, 0)
       
-      #Creates chart view
-      lns = slicer.mrmlScene.GetNodesByClass('vtkMRMLLayoutNode')
+      aPointsNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      aPointsArray = aPointsNode.GetArray()
+      aPointsArray.SetNumberOfTuples(len(A))
+      aPointsArray.SetNumberOfComponents(2)
+      for i, (a, s) in enumerate(zip(A,S)):
+        aPointsArray.SetComponent(i, 0, s)
+        aPointsArray.SetComponent(i, 1, a)
+        aPointsArray.SetComponent(i, 2, 0)
+      
       lns.InitTraversal()
       ln = lns.GetNextItemAsObject()
       ln.SetViewArrangement(24)
-
-      #Get chart view node
-      cvns = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartViewNode')
-      cvns.InitTraversal()
-      cvn = cvns.GetNextItemAsObject()
       
-      #Create chart node
-      cn = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
-
-      cn.AddArray('plot',aDomainNode.GetID())
+      cna.AddArray('S-A Polyfit', aDomainNode.GetID())
+      cna.AddArray('S-A Data', aPointsNode.GetID())
 
       #Setting properties on the chart
-      cn.SetProperty('default', 'title', '')
-      cn.SetProperty('default', 'xAxisLabel', 'S-I')
-      cn.SetProperty('default', 'yAxisLabel', 'A-P')
+      cna.SetProperty('default', 'title', Node.GetName() + ' A-P')
+      cna.SetProperty('default', 'xAxisLabel', 'S-I')
+      cna.SetProperty('default', 'yAxisLabel', 'A-P')
       
       #Which chart to display
-      cvn.SetChartNodeID(cn.GetID())
+      cvn.SetChartNodeID(cna.GetID())
+      
+      """
+      #Create chart node
+      cnr = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
+      
+      rSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+      rDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      rDomain = rDomainNode.GetArray()
+      rDomain.SetNumberOfTuples(PointsPerCurve)
+      rDomain.SetNumberOfComponents(2)
+      for i, s in enumerate(sSpace):
+        rDomain.SetComponent(i, 0, s)
+        rDomain.SetComponent(i, 1, SrPolynomial(s))
+        
+      rPointsNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      rPointsArray = rPointsNode.GetArray()
+      rPointsArray.SetNumberOfTuples(len(R))
+      rPointsArray.SetNumberOfComponents(2)
+      for i, (r, s) in enumerate(zip(R,S)):
+        rPointsArray.SetComponent(i, 0, s)
+        rPointsArray.SetComponent(i, 1, r)
+      
+      #lns.InitTraversal()
+      #ln = lns.GetNextItemAsObject()
+      #ln.SetViewArrangement(24)
+      #cvns.InitTraversal()
+      #cvn = cvns.GetNextItemAsObject()
+      
+      cnr.AddArray('S-R Polyfit', rDomainNode.GetID())
+      cnr.AddArray('S-R Data', rPointsNode.GetID())
+
+      #Setting properties on the chart
+      cnr.SetProperty('default', 'title', Node.GetName() + ' R-L')
+      cnr.SetProperty('default', 'xAxisLabel', 'S-I')
+      cnr.SetProperty('default', 'yAxisLabel', 'R-L')
+      
+      #Which chart to display
+      cvn.SetChartNodeID(cnr.GetID())
+      """
+      
+    return (SrPolynomial, SaPolynomial)
+      
+  def SiLandmarkFrequencyAnalysis(self, Node, (SrPolynomial, SaPolynomial)):
+    PointsPerCurve = 500
+    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
+    R = [Coords[i][0] for i in range(len(Coords))]
+    A = [Coords[i][1] for i in range(len(Coords))]
+    S = [Coords[i][2] for i in range(len(Coords))]
+    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
     
+    # Distances along the polynomial to each landmark in the given dimension - first distance (1st point from nowehere) is 0
+    PointDistances = []
+    #priorS = sSpace[0]
+    sIndex = 1
+    
+    # Find points in sSpace corresponding to landmarks in both R and A dimension
+    for i, Landmark in enumerate(zip(R[:-1],A[:-1])):
+      CurveDistance = 0
+      PointDistances.append(0)
+      while sSpace[sIndex] > S[i+1]:
+        PriorS = sSpace[sIndex-1]
+        CurrentS = sSpace[sIndex]
+        PriorR = SrPolynomial(PriorS)
+        CurrentR = SrPolynomial(CurrentS)
+        PriorA = SaPolynomial(PriorS)
+        CurrentA = SaPolynomial(CurrentS)
+        PointDistances[i] += np.sqrt(((CurrentS- PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2))
+        sIndex += 1
+    
+    MissingPointPredictions = np.zeros(len(PointDistances))
+    MeanInterpointDistance = np.mean(PointDistances)
+    PointDistanceStd = np.std(PointDistances)
+    for i, Distance in enumerate(PointDistances):
+      if Distance > (MeanInterpointDistance + (PointDistanceStd)):
+        MissingPointPredictions[i] = 1
+      
+    print Node.GetName(), ' PointDistances: ', PointDistances
+    print Node.GetName(), ' OmissionPredictions: ', MissingPointPredictions
+    print ""
+      
+    for i, IntervalPrediction in enumerate(MissingPointPredictions):
+      if IntervalPrediction == 1:     # Interval is missing a point between Landmark[i] and Landmark[i+1]
+        DistanceOffset = 0            # Polynomila fit curve-wise distance from last point before broken interval
+        PriorS = 
+        
+        if i == 0:          # Boundary condition consideration for expected interval size calculation
+          IndicativeDistances = []
+          j = 1
+          while len(IndicativeDistances) < 2:
+            if MissingPointPredictions[j] == 0:
+              IndicativeDistances.append(PointDistances[j])
+            j += 1
+            if j >= len(MissingPointPredictions):
+              print "Error - " + Node.GetName() + " is missing to many points for interpolation"
+              return
+          
+          DistanceGuess = np.mean(IndicativeDistances)
+          while DistanceOffset < DistanceGuess:
+            DistanceOffset += 
+          
+        if i == len(MissingPointPredictions) - 1: # Boundary condition at bottom end of spine
+          IndicativeDistances = []
+          j = len(MissingPointPredictions) - 2
+          while len(IndicativeDistances) < 2:
+            if MissingPointPredictions[j] == 0:
+              IndicativeDistances.append(PointDistances[j])
+            j -= 1
+            if j < 0:
+              print "Error - " + Node.GetName() + " is missing to many points for interpolation"
+              return
+              
+        # ASSERT We are not at a boundary interval
+        IndicativeDistances = []
+        j = i-1
+        while len(IndicativeDistances) < 1:
+          if MissingPointPredictions[j] == 0:
+            IndicativeDistances.append(PointDistances[j])
+          j -= 1
+          if j < 0:
+            print "Error - " + Node.GetName() + " is missing to many points for interpolation"
+            return
+            
+        k = i+1
+        while len(IndicativeDistances) < 1:
+          if MissingPointPredictions[k] == 0:
+            IndicativeDistances.append(PointDistances[k])
+          k += 1
+          if k >= len(MissingPointPredictions):
+            print "Error - " + Node.GetName() + " is missing to many points for interpolation"
+            return
+        
+        # ASSERT IndicativeDistances contains the two nearest interval distances which are not believed to be missing points
+        
       
   def RepairNode(self):
     self.ClassifyLeftRight()
-    self.LeftPolyCoefs = self.PolyFit(self.LeftMarkupsNode)
-    self.RightPolyCoefs = self.PolyFit(self.RightMarkupsNode, Plot=True)
-    
+    (LeftSrPolynomial, LeftSaPolynomial) = self.PolyFit(self.LeftMarkupsNode)
+    self.SiLandmarkFrequencyAnalysis(self.LeftMarkupsNode, (LeftSrPolynomial, LeftSaPolynomial))
+    (RightSrPolynomial, RightSaPolynomial) = self.PolyFit(self.RightMarkupsNode, Plot=True)
+    self.SiLandmarkFrequencyAnalysis(self.RightMarkupsNode, (RightSrPolynomial, RightSaPolynomial))
   
