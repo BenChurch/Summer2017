@@ -96,6 +96,7 @@ class ModelToPatientRegistrationWidget:
     RepairInterface.text = "Markups node repair"
     self.layout.addWidget(RepairInterface)
     RepairInterfaceLayout = qt.QFormLayout(RepairInterface)
+    #RepairInterfaceLayout.collapsed = True
     
     # Dropdown list to select MarkupsNode for repair
     self.RepairNodeSelector = slicer.qMRMLNodeComboBox()
@@ -1019,27 +1020,82 @@ class MarkupsNodeModificationLogic:
       print "Landmark " + self.OutputNode.GetNthFiducialLabel(self.OutputNode.GetNumberOfFiducials()-2) + " and " + self.OutputNode.GetNthFiducialLabel(self.OutputNode.GetNumberOfFiducials()-1) + " created."
 
 class IncompleteMarkupsNodeRepairLogic:
-  def __init__(self, MarkupsNode):
-    self.MarkupsNode = MarkupsNode
+  def __init__(self, Markups):
+    self.MarkupsNode = Markups
+    self.LeftMarkupsNode = slicer.vtkMRMLMarkupsFiducialNode()
+    self.RightMarkupsNode = slicer.vtkMRMLMarkupsFiducialNode()
+    self.LeftMarkupsNode.SetName(self.MarkupsNode.GetName() + 'Left')
+    self.RightMarkupsNode.SetName(self.MarkupsNode.GetName() + 'Right')
+
+    self.OriginalPoints = []
+    for i in range(Markups.GetNumberOfFiducials()):
+      self.OriginalPoints.append((Markups.GetNthFiducialLabel(i), Markups.GetMarkupPointVector(i,0)))
+    self.OriginalLabels = [i[0] for i in self.OriginalPoints]
+    self.OriginalCoords = [i[1] for i in self.OriginalPoints]
+  
+  def SortPointsVertically(self):
+    self.VerticallySortedPoints = sorted(self.OriginalPoints, key=lambda LabelCoords: LabelCoords[1][2])
+    self.VerticallySortedPoints.reverse()
+    #print self.VerticallySortedPoints
+  
+  def AnisotrpoicNormalization(self, PointSet):
+    # Start by finding top and bottom points of spine for verticle normalization
+    SetLeft = 10000
+    SetRight = -10000
+    SetFront = -10000
+    SetBack = 10000
+    SetTop = -10000
+    SetBottom = 10000
+
+    for Point in PointSet:
+      Coords  = Point[1]
+      if Coords[0] < SetLeft:
+        SetLeft = Coords[0]
+      if Coords[0] > SetRight:
+        SetRight = Coords[0]
+      if Coords[1] < SetBack:
+        SetBack = Coords[1]
+      if Coords[1] > SetFront:
+        SetFront = Coords[1]
+      if Coords[2] > SetTop:
+        SetTop = Coords[2]
+      if Coords[2] < SetBottom:
+        SetBottom = Coords[2]
+      
+    SetHeight = SetTop - SetBottom
+    SetWidth = SetRight - SetLeft
+    SetDepth = SetFront - SetBack
+    
+    # (Re) initialize normalized point list
+    NormalizedPoints = len(PointSet) * [0]
+    
+    # Normalize S-I dimension to R-L scale
+    for i, Point in enumerate(PointSet):
+      Coords = Point[1]
+      NormalizedPoints[i] = np.array([Coords[0], (Coords[1]) * (SetWidth / (SetDepth * 3.0)), (Coords[2]) * (SetWidth / (SetHeight * 2.0))])
+    return NormalizedPoints
   
   def ShouldStopKMeans(self, oldCentroids, Centroids, iterations):
     MaxIterations = 500
     StoppingDelta = 0.05
+    #print oldCentroids, Centroids
     if iterations > MaxIterations: return True
     if iterations == 0:
       return False
     for C in range(len(oldCentroids)):
+      #print oldCentroids[C], Centroids[C]
       if np.linalg.norm(oldCentroids[C] - Centroids[C]) < StoppingDelta:
         return True
     return False
 
   def GetKMeansLabels(self, DataSet, Centroids, Labels):
-    for i, DataPoint in enumerate(DataSet):
-      PointVector = np.array(DataPoint)
-      minDist = np.linalg.norm(PointVector - Centroids[0])
+    for i, Coords in enumerate(DataSet):
+      #PointCentroidDistance = np.linalg.norm(Coords - Centroids[0])
+      minDist = 1000000
       Labels[i] = 0
       for j, CentroidVector in enumerate(Centroids):
-        PointCentroidDistance = np.linalg.norm(PointVector - CentroidVector)
+        #print Coords, CentroidVector#, np.linalg.norm(Coords - CentroidVector)
+        PointCentroidDistance = np.linalg.norm(Coords - CentroidVector)
         if PointCentroidDistance < minDist:
           minDist = PointCentroidDistance
           Labels[i] = j
@@ -1047,31 +1103,37 @@ class IncompleteMarkupsNodeRepairLogic:
 
   def GetCentroids(self, DataSet, Labels, k):
     Centroids = []
+    #print Labels
     for C in range(k):    # For each centroid
       Centroid = np.random.uniform() * np.ones(len(DataSet[0]))    # Each centroid with as many dimensions as the data
       
-      for i, DataPoint in enumerate(DataSet): # Take each data point contributing to the centroid into consideration
+      for i, Coords in enumerate(DataSet): # Take each data point contributing to the centroid into consideration
         if Labels[i] == C:                    # if it belongs to the current centroid
           for dim in range(len(Centroid)):
-            Centroid[dim] += DataPoint[dim]
+            Centroid[dim] += Coords[dim]
             
       for dim in range(len(Centroid)):
         Centroid[dim] = Centroid[dim] / np.count_nonzero(Labels == C)
       Centroids.append(Centroid)
     return Centroids
 
-  def KMeans(self, DataSet, k):   # Expects numpy array for DataSet
-    DataSetLabels = -1 * np.ones(len(DataSet))
+  def KMeans(self, DataSet, k=2):   # Expects DataSet as list of (Label, np.array[R,A,S]) tuples, uses k=2 by default for left and right sides
+    DataSetLabels = np.zeros(len(DataSet))
+    for i in range(len(DataSetLabels)):
+      DataSetLabels[i] = int(round(np.random.uniform()))
     # Initialize centroids
     numFeatures = len(DataSet[0])
-    Centroids = []
-    for Cent in range(k):
-      Centroids.append(np.random.uniform() * np.ones(numFeatures))
+    Centroids = k * [0]
+    # Try initializing one centroid on each side
+    Centroids[0] = np.array([min([i[0] for i in DataSet]),0,0])
+    Centroids[1] = np.array([max([i[0] for i in DataSet]),0,0])
     
   # Initialize book keeping variables
     iterations = 0
-    oldCentroids = Centroids
-    
+    oldCentroids = k * [0]
+    for Cent in range(k):
+      oldCentroids[Cent] = np.array(numFeatures * [np.random.uniform()])
+
     # Run the k-means algorithm
     while not self.ShouldStopKMeans(oldCentroids, Centroids, iterations):
       oldCentroids = Centroids
@@ -1079,70 +1141,108 @@ class IncompleteMarkupsNodeRepairLogic:
       
       DataSetLabels = self.GetKMeansLabels(DataSet, Centroids, DataSetLabels)
       Centroids = self.GetCentroids(DataSet, DataSetLabels, k)
+      #print Centroids
     return (DataSetLabels, Centroids)
     
-  def RepairNode(self):
-    # Start by finding top and bottom points of spine for verticle normalization
-    SpineLeft = 10000
-    SpineRight = -10000
-    SpineFront = -10000
-    SpineBack = 10000
-    SpineTop = -10000
-    SpineBottom = 10000
+  def ClassifyLeftRight(self):
+    self.SortPointsVertically()
+    SortedPointsLeftVotes = len(self.VerticallySortedPoints) * [0]
+    SortedPointsRightVotes = len(self.VerticallySortedPoints) * [0]
+    for i in range(0, len(self.VerticallySortedPoints)-5):
+      #Sextuple = [np.array(k[1]) for k in self.VerticallySortedPoints[i:i+6]]
+      Sextuple = self.VerticallySortedPoints[i:i+6]
+      #print Sextuple
+      NormalizedSextuple = self.AnisotrpoicNormalization(Sextuple)
+      (KmLabels, KmCentroids) = self.KMeans(NormalizedSextuple, 2)
 
-    for PointIndex in range(self.MarkupsNode.GetNumberOfFiducials()):
-      Point  = self.MarkupsNode.GetMarkupPointVector(PointIndex, 0)
-      if Point[0] < SpineLeft:
-        SpineLeft = Point[0]
-      if Point[0] > SpineRight:
-        SpineRight = Point[0]
-      if Point[1] < SpineBack:
-        SpineBack = Point[1]
-      if Point[1] > SpineFront:
-        SpineFront = Point[1]
-      if Point[2] > SpineTop:
-        SpineTop = Point[2]
-      if Point[2] < SpineBottom:
-        SpineBottom = Point[2]
+      # If KmLabel == 0 indicates a left-side point
+      if KmCentroids[0][0] < KmCentroids[1][0]:
+        for j, Label in enumerate(KmLabels):
+          if Label == 0:
+            SortedPointsLeftVotes[i + j] = SortedPointsLeftVotes[i + j] + 1
+          else:
+            SortedPointsRightVotes[i + j] = SortedPointsRightVotes[i + j] + 1
+      else: # If KmLabel == 0 indicates a right-side point
+        for j, Label in enumerate(KmLabels):
+          #print i, j
+          if Label == 0:
+            SortedPointsRightVotes[i + j] = SortedPointsRightVotes[i + j] + 1
+          else:
+            SortedPointsLeftVotes[i + j] = SortedPointsLeftVotes[i + j] + 1
+
+    self.LeftMarkupsNode.RemoveAllMarkups()
+    self.RightMarkupsNode.RemoveAllMarkups()
+    
+    for i, UnclassifiedPoint in enumerate(self.VerticallySortedPoints):
+      OriginalPointIndex = self.OriginalLabels.index(UnclassifiedPoint[0])
+      OriginalPoint = self.OriginalCoords[OriginalPointIndex]
+      if SortedPointsLeftVotes[i] > SortedPointsRightVotes[i]:
+        self.LeftMarkupsNode.AddFiducialFromArray(OriginalPoint)
+        self.LeftMarkupsNode.SetNthFiducialLabel(self.LeftMarkupsNode.GetNumberOfFiducials()-1, self.VerticallySortedPoints[i][0] + '_Left')
+      else:
+        self.RightMarkupsNode.AddFiducialFromArray(OriginalPoint)
+        self.RightMarkupsNode.SetNthFiducialLabel(self.RightMarkupsNode.GetNumberOfFiducials()-1, self.VerticallySortedPoints[i][0] + '_Right')
+
+    if slicer.util.getNode(self.LeftMarkupsNode.GetName()) == None:
+      slicer.mrmlScene.AddNode(self.LeftMarkupsNode)
+    if slicer.util.getNode(self.RightMarkupsNode.GetName()) == None:
+      slicer.mrmlScene.AddNode(self.RightMarkupsNode)
+    
+  def PolyFit(self, Node, Plot=False):    # Meant to fit polynomial to right or left sideed landmarks, returns polynomial coefficients
+    PointsPerCurve = 500
+    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
+    R = [Coords[i][0] for i in range(len(Coords))]
+    A = [Coords[i][1] for i in range(len(Coords))]
+    S = [Coords[i][2] for i in range(len(Coords))]
+    
+    S_R_FitCoefs = np.polyfit(S, R, len(S)/2)
+    S_A_FitCoefs = np.polyfit(S, A, len(S)/2)
+    
+    SrPolynomial = np.poly1d(S_R_FitCoefs)
+    SaPolynomial = np.poly1d(S_A_FitCoefs)
+    
+    print "SR fit:", SrPolynomial
+    print "SA fit:", SaPolynomial
+    
+    if Plot:
+      sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
       
+      aDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      aDomain = aDomainNode.GetArray()
+      aDomain.SetNumberOfTuples(PointsPerCurve)
+      aDomain.SetNumberOfComponents(2)
+      for i, s in enumerate(sSpace):
+        aDomain.SetComponent(i, 0, s)
+        aDomain.SetComponent(i, 1, SaPolynomial(s))
+      
+      #Creates chart view
+      lns = slicer.mrmlScene.GetNodesByClass('vtkMRMLLayoutNode')
+      lns.InitTraversal()
+      ln = lns.GetNextItemAsObject()
+      ln.SetViewArrangement(24)
 
-    SpineHeight = SpineTop - SpineBottom
-    SpineWidth = SpineRight - SpineLeft
-    SpineDepth = SpineFront - SpineBack
+      #Get chart view node
+      cvns = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartViewNode')
+      cvns.InitTraversal()
+      cvn = cvns.GetNextItemAsObject()
+      
+      #Create chart node
+      cn = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
 
-    UnclassifiedPoints = []
-    # Normalize S-I dimension to R-L scale
-    for PointIndex in range(self.MarkupsNode.GetNumberOfFiducials()):
-      Point = self.MarkupsNode.GetMarkupPointVector(PointIndex, 0)
-      Point[1] = (Point[1]) * (SpineWidth / (SpineDepth * 3.0))
-      Point[2] = (Point[2]) * (SpineWidth / (SpineHeight * 2.0))
-      UnclassifiedPoints.append(np.array(Point))
+      cn.AddArray('plot',aDomainNode.GetID())
 
-    (KmLabels, KmCentroids) = self.KMeans(UnclassifiedPoints, 2)
-
-    LeftMarkupsNode = slicer.vtkMRMLMarkupsFiducialNode()
-    LeftMarkupsNode.SetName(self.MarkupsNode.GetName() + 'Left')
-
-    RightMarkupsNode = slicer.vtkMRMLMarkupsFiducialNode()
-    RightMarkupsNode.SetName(self.MarkupsNode.GetName() + 'Right')
-
-    # If KmLabel == 0 indicates a left-side point
-    if KmCentroids[0][0] < KmCentroids[1][0]:
-      for i, UnclassifiedPoint in enumerate(UnclassifiedPoints):
-        if KmLabels[i] == 0:
-          LeftMarkupsNode.AddFiducialFromArray(self.MarkupsNode.GetMarkupPointVector(i,0))
-          LeftMarkupsNode.SetNthFiducialLabel(LeftMarkupsNode.GetNumberOfFiducials()-1, self.MarkupsNode.GetNthFiducialLabel(i) + '_Left')
-        else:
-          RightMarkupsNode.AddFiducialFromArray(self.MarkupsNode.GetMarkupPointVector(i,0))
-          RightMarkupsNode.SetNthFiducialLabel(RightMarkupsNode.GetNumberOfFiducials()-1, self.MarkupsNode.GetNthFiducialLabel(i) + '_Right')
-    else: # If KmLabel == 0 indicates a right-side point
-      for i, UnclassifiedPoint in enumerate(UnclassifiedPoints):
-        if KmLabels[i] == 0:
-          RightMarkupsNode.AddFiducialFromArray(self.MarkupsNode.GetMarkupPointVector(i,0))
-          RightMarkupsNode.SetNthFiducialLabel(RightMarkupsNode.GetNumberOfFiducials()-1, self.MarkupsNode.GetNthFiducialLabel(i) + '_Right')
-        else:
-          LeftMarkupsNode.AddFiducialFromArray(self.MarkupsNode.GetMarkupPointVector(i,0))
-          LeftMarkupsNode.SetNthFiducialLabel(LeftMarkupsNode.GetNumberOfFiducials()-1, self.MarkupsNode.GetNthFiducialLabel(i) + '_Left')
-
-    slicer.mrmlScene.AddNode(LeftMarkupsNode)
-    slicer.mrmlScene.AddNode(RightMarkupsNode)
+      #Setting properties on the chart
+      cn.SetProperty('default', 'title', '')
+      cn.SetProperty('default', 'xAxisLabel', 'S-I')
+      cn.SetProperty('default', 'yAxisLabel', 'A-P')
+      
+      #Which chart to display
+      cvn.SetChartNodeID(cn.GetID())
+    
+      
+  def RepairNode(self):
+    self.ClassifyLeftRight()
+    self.LeftPolyCoefs = self.PolyFit(self.LeftMarkupsNode)
+    self.RightPolyCoefs = self.PolyFit(self.RightMarkupsNode, Plot=True)
+    
+  

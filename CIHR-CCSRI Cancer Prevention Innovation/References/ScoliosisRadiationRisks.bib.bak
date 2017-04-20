@@ -1,1 +1,70 @@
 % Encoding: UTF-8
+
+@Article{Doody2000,
+  author =  {M.M. Doody, and J.E. Lonstein, and M. Stovall, and D.G. Hacker, and N. Luckyanov, and C.E. Land},
+  title =   {Breast Cancer Mortality After Diagnostic Radiography},
+  journal = {Spine},
+  year =    {2000},
+  volume =  {25},
+  number =  {16},
+  pages =   {2052-2063},
+  file =    {:Doody2000.pdf:PDF}
+}
+
+@Article{Faria2013,
+  author =  {R. Faria, and C. McKenna, and R. Wade, and H. Yang, and N. Woolacott, and M. Sculpher},
+  title =   {The EOS 2D/3D X-ray imaging system: A cost-effectiveness analysis quantifying the health benefits from reduced radiation exposure},
+  journal = {European Journal of Radiology},
+  year =    {2013},
+  volume =  {82},
+  pages =   {e342-e349},
+  file =    {:Faria2013.pdf:PDF}
+}
+
+@Article{Himmetoglu2015,
+  author =  {S. Himmetoglu, and M.F. Guven, and N. Bilsel, and Y. Dincer},
+  title =   {DNA damage in children with scoliosis following X-ray exposure},
+  journal = {Minerva pediatrica},
+  year =    {2015},
+  volume =  {67},
+  number =  {1},
+  pages =   {1-5},
+  file =    {:Himmetoglu2015.pdf:PDF}
+}
+
+@Article{Law2016,
+  author =  {M. Law, and W.K. Ma, and D. Lau, and E. Chan, and L. Yip, and W. Lam},
+  title =   {Cumulative radiation exposure and associated cancer risk estimates for scoliosis patients: Impact of repetitive full spine Radiography},
+  journal = {European Journal of Radiology},
+  year =    {2016},
+  volume =  {85},
+  pages =   {625-628},
+  file =    {:Law2016.pdf:PDF}
+}
+
+@Article{McKenna2012,
+  author =  {C. McKenna, and R. Wade, and R. Faria, and H. Yang, and L. Stirk, and N. Gummerson, and M. Sculpher, and N. Woolacott},
+  title =   {EOS 2D/3D X-ray imaging system: a systematic review and economic evaluation},
+  journal = {Health Technology Assessment},
+  year =    {2012},
+  volume =  {16},
+  number =  {14},
+  file =    {:McKenna2012.pdf:PDF}
+}
+
+@Article{Ronckers2012,
+  author =  {C.M. Ronckers, and C.E. Land, and J.S. Miller, and M. Stovall, and J.E. Lonstein, and M.M. Doody},
+  title =   {Cancer Mortality among Women Frequently Exposed to Radiographic Examinations for Spinal Disorders},
+  journal = {Radiation Research},
+  year =    {2010},
+  volume =  {174},
+  pages =   {83-80},
+  file =    {:Ronckers2010.pdf:PDF}
+}
+
+@comment{jabref-meta: groupsversion:3;}
+
+@comment{jabref-meta: groupstree:
+0 AllEntriesGroup:;
+1 ExplicitGroup:Radiation-Cancer Relationship\;0\;Doody2000\;Ronckers2012\;;
+}
