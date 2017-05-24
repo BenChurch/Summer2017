@@ -7,7 +7,7 @@ import numpy as np
 class ModelToPatientRegistration:
   def __init__(self, parent):
     parent.title = "ModelToPatientRegistration"
-    parent.categories = ["Landmark Registration"]
+    parent.categories = ["Scoliosis"]
     parent.dependencies = []
     parent.contributors = ["Ben Church - Queen's University, PerkLab"]
     parent.helpText = """
@@ -90,33 +90,6 @@ class ModelToPatientRegistrationWidget:
     self.ToModifySelector.connect("currentNodeChanged(vtkMRMLMarkupsFiducialNode*)", self.onSelect(self.ToModifySelector))
     self.ModifiedStorageNode.connect("currentNodeChanged(vtkMRMLMarkupsFiducialNode*)", self.onSelect(self.ModifiedStorageNode))
     self.ModifyLandmarkSet.connect('clicked(bool)', self.OnModifyMarkupsNode)
-    
-    # User interface for incomplete landmark set repair
-    RepairInterface = ctk.ctkCollapsibleButton()
-    RepairInterface.text = "Markups node repair"
-    self.layout.addWidget(RepairInterface)
-    RepairInterfaceLayout = qt.QFormLayout(RepairInterface)
-    #RepairInterfaceLayout.collapsed = True
-    
-    # Dropdown list to select MarkupsNode for repair
-    self.RepairNodeSelector = slicer.qMRMLNodeComboBox()
-    self.RepairNodeSelector.nodeTypes = ["vtkMRMLMarkupsFiducialNode",]
-    self.RepairNodeSelector.selectNodeUponCreation = True
-    self.RepairNodeSelector.enabled  = True
-    self.RepairNodeSelector.addEnabled = True
-    self.RepairNodeSelector.noneEnabled = False
-    self.RepairNodeSelector.removeEnabled = True
-    self.RepairNodeSelector.renameEnabled = True
-    self.RepairNodeSelector.toolTip = "Choose the incomplete landmarks node to be repaired to completion"
-    RepairInterfaceLayout.addRow("Node to repair:", self.RepairNodeSelector)
-    self.RepairNodeSelector.setMRMLScene(slicer.mrmlScene)
-    
-    self.RepairNodeButton = qt.QPushButton("Repair landmarks node")
-    self.RepairNodeButton.toolTip = "Currently seperates right from left sided points"
-    RepairInterfaceLayout.addRow(self.RepairNodeButton)
-    
-    # Button connections
-    self.RepairNodeButton.connect('clicked(bool)', self.OnRepairButtonClicked)
     
     # Set up user interface panel
     moduleInterface = ctk.ctkCollapsibleButton()
@@ -242,10 +215,6 @@ class ModelToPatientRegistrationWidget:
       logic.RemoveHalfVertebrae()
     elif self.RemoveTwoThirdsLandmarks.checkState():
       logic.RemoveTwoThirdsVertebrae()
-
-  def OnRepairButtonClicked(self):
-    logic = IncompleteMarkupsNodeRepairLogic(self.RepairNodeSelector.currentNode())
-    logic.RepairNode()
   
   def onGeneratePoints(self):
     logic = ModelToPatientRegistrationLogic(self.FromInputSelector.currentNode(), self.ToInputSelector.currentNode(), self.FromOutputSelector.currentNode(), self.ToOutputSelector.currentNode())
@@ -290,20 +259,11 @@ class ModelToPatientRegistrationLogic:
     self.ModelRightLeftVectorsRight = []
     self.ModelAntPostVectorsRight = []
     
-    # Scaling factors
-    self.PatientScalingFactorsLeft = []
-    self.PatientScalingFactorsRight = []
-    self.ModelScalingFactorsLeft = []
-    self.ModelScalingFactorsRight = []
 
     
     # Input and output (anchor) points
     self.ModelRegistrationPoints = []
-    self.ModelRegistrationPointsLeft = []
-    self.ModelRegistrationPointsRight = []
     self.PatientRegistrationPoints = []
-    self.PatientRegistrationPointsLeft = []
-    self.PatientRegistrationPointsRight = []
     self.NamesIntersection = []
 
     
@@ -311,6 +271,19 @@ class ModelToPatientRegistrationLogic:
     self.PatientScalePoints = []
     self.ModelScalePoints = []
     """
+    
+    self.ModelRegistrationPointsLeft = []
+    
+    # Partially redundant variables - required for certain scaling conditions
+    # TODO: MERGE REDUNDANT VARIABLES INTO STREAMLINED FUNCTIONALITY
+    self.PatientScalingFactorsLeft = []
+    self.PatientScalingFactorsRight = []
+    self.ModelScalingFactorsLeft = []
+    self.ModelScalingFactorsRight = []
+    self.ModelRegistrationPointsRight = []
+    self.PatientRegistrationPointsLeft = []
+    self.PatientRegistrationPointsRight = []
+    
     # Reinitialize
     slicer.modules.ModelToPatientRegistrationWidget.ToOutputSelector.currentNode().RemoveAllMarkups()
     slicer.modules.ModelToPatientRegistrationWidget.FromOutputSelector.currentNode().RemoveAllMarkups()
@@ -340,10 +313,9 @@ class ModelToPatientRegistrationLogic:
       self.AnchorPointsNode = slicer.vtkMRMLMarkupsFiducialNode()
       self.AnchorPointsNode.SetName("PatientAnchorPoints" + LandmarksNode.GetName()[-3:])
       
-      self.AnchorOffsetScaleFactors = np.zeros(self.LandmarksNode.GetNumberOfFiducials())
+      #self.AnchorOffsetScaleFactors = np.zeros(self.LandmarksNode.GetNumberOfFiducials())
+      self.AnchorOffsetScaleFactors = []
       self.AnchorOffsetDirectionVectors = []
-      #for P in range(len(self.AnchorOffsetScaleFactors)):
-      #  self.AnchorOffsetDirectionVectors.append(np.zeros(3))
       
       Parent.ComputeOffsetUnitVectors(self)
       
@@ -385,8 +357,7 @@ class ModelToPatientRegistrationLogic:
       SortedLumbarPoints = sorted(RawLumbarPoints, key=lambda tup: int(tup[0][1:-1]))  # Sort by labels alphabetically
       SortedLandmarks =  SortedThoracicPoints + SortedLumbarPoints
       SortedLandmarksNode = slicer.vtkMRMLMarkupsFiducialNode()
-      # Might not need name, not adding this node to scene?
-      #SortedLandmarksNode.SetName(self.RawLandmarksNode.GetName() + "Sorted")
+
       for i, Landmark in enumerate(SortedLandmarks):
         SortedLandmarksNode.AddFiducialFromArray(Landmark[1])
         SortedLandmarksNode.SetNthFiducialLabel(i, Landmark[0])
@@ -394,7 +365,10 @@ class ModelToPatientRegistrationLogic:
   
   class Model:
     def __init__(self, Parent, Patient, FullLandmarksNode, RegistrationPointsNode, ScalePointsNode=None):
+      self.Parent = Parent
       import numpy as np
+      self.UseScalingPoints = Parent.UseScalingPoints
+      
       self.FullLandmarksNode = FullLandmarksNode    # Contains all landmarks in UsLandmarks_Atlas, not trimmed to correspond to patient
       self.FullScalePointsNode = ScalePointsNode
       (self.LandmarksNode, self.ScalePointsNode) = self.EstablishCorrespondence(Patient)
@@ -402,10 +376,9 @@ class ModelToPatientRegistrationLogic:
       self.AnchorPointsNode = slicer.vtkMRMLMarkupsFiducialNode()
       self.AnchorPointsNode.SetName("ModelAnchorPoints" + Patient.RawLandmarksNode.GetName()[-3:])
       
-      self.AnchorOffsetScaleFactors = np.zeros(self.LandmarksNode.GetNumberOfFiducials())
+      #self.AnchorOffsetScaleFactors = np.zeros(self.LandmarksNode.GetNumberOfFiducials())
+      self.AnchorOffsetScaleFactors = []
       self.AnchorOffsetDirectionVectors = []
-      #for P in range(len(self.AnchorOffsetScaleFactors)):
-       # self.AnchorOffsetDirectionVectors.append(np.zeros(3))
       
       Parent.ComputeOffsetUnitVectors(self)
       
@@ -413,113 +386,61 @@ class ModelToPatientRegistrationLogic:
       
     def EstablishCorrespondence(self, Patient):     # Returns (vtkMRMLMarkupsFiducialNode(), vtkMRMLMarkupsFiducialNode()) ---- (LandmarksNode, ScalePointsNode)
       CorrespondingLandmarksNode = slicer.vtkMRMLMarkupsFiducialNode()
-      # Might not need to set name, not adding to scene
-      #CorrespondingLandmarksNode.SetName("aaa")
+      
+      # Use labels to find model points with corresponding patient points
       PatientLandmarkPointCounter = 0
-      for P in range(self.FullLandmarksNode.GetNumberOfFiducials()):
-        if Patient.LandmarksNode.GetNthFiducialLabel(PatientLandmarkPointCounter) == self.FullLandmarksNode.GetNthFiducialLabel(P):
-          CorrespondingLandmarksNode.AddFiducialFromArray(self.FullLandmarksNode.GetMarkupPointVector(P,0))
-          CorrespondingLandmarksNode.SetNthFiducialLabel(PatientLandmarkPointCounter, Patient.LandmarksNode.GetNthFiducialLabel(PatientLandmarkPointCounter))
+      NumPatientLandmarks = Patient.LandmarksNode.GetNumberOfFiducials()
+      for (ModelPointLabel, ModelPointCoords) in (zip([self.FullLandmarksNode.GetNthFiducialLabel(i) for i in range(self.FullLandmarksNode.GetNumberOfFiducials())], [self.FullLandmarksNode.GetMarkupPointVector(i, 0) for i in range(self.FullLandmarksNode.GetNumberOfFiducials())])):
+        (PatientPointLabel, PatientPointCoords) = (Patient.LandmarksNode.GetNthFiducialLabel(PatientLandmarkPointCounter), Patient.LandmarksNode.GetMarkupPointVector(PatientLandmarkPointCounter, 0))
+        if PatientPointLabel == ModelPointLabel:
+          CorrespondingLandmarksNode.AddFiducialFromArray(ModelPointCoords)
+          CorrespondingLandmarksNode.SetNthFiducialLabel(PatientLandmarkPointCounter, PatientPointLabel)
           PatientLandmarkPointCounter += 1
+
+      for (PatientPointLabel, PatientPointCoords) in zip([Patient.LandmarksNode.GetNthFiducialLabel(i) for i in range(NumPatientLandmarks)], [Patient.LandmarksNode.GetMarkupPointVector(i, 0) for i in range(NumPatientLandmarks)]):
+        if(PatientPointLabel[-1] == "L"):
+          self.Parent.PatientRegistrationPointsLeft.append((PatientPointLabel, PatientPointCoords))
+        else:
+          self.Parent.PatientRegistrationPointsRight.append((PatientPointLabel, PatientPointCoords))
         
+      # Use labels to find model scale points with corresponding patient scale points
       CorrespondingScalePointsNode = slicer.vtkMRMLMarkupsFiducialNode()
-      PatientScalePointCounter = 0
-      for P in range(self.FullScalePointsNode.GetNumberOfFiducials()):
-        if Patient.ScalePointsNode.GetNthFiducialLabel(PatientScalePointCounter) == self.FullScalePointsNode.GetNthFiducialLabel(P):
-          CorrespondingScalePointsNode.AddFiducialFromArray(self.FullScalePointsNode.GetMarkupPointVector(P, 0))
-          CorrespondingScalePointsNode.SetNthFiducialLabel(PatientLandmarkPointCounter, self.FullScalePointsNode.GetNthFiducialLabel(P))
-          PatientScalePointCounter += 1
+      if self.UseScalingPoints:
+        PatientScalePointCounter = 0
+        FullNumModelScalePoints = self.FullScalePointsNode.GetNumberOfFiducials()
+        for (ModelScalePointLabel, ModelScalePointCoords) in (zip([self.FullScalePointsNode.GetNthFiducialLabel(i) for i in range(FullNumModelScalePoints)], [self.FullScalePointsNode.GetMarkupPointVector(i, 0) for i in range(FullNumModelScalePoints)])):
+          PatientPointLabel = Patient.ScalePointsNode.GetNthFiducialLabel(PatientScalePointCounter)
+          if PatientPointLabel == ModelScalePointLabel:
+            CorrespondingScalePointsNode.AddFiducialFromArray(ModelScalePointCoords)
+            CorrespondingScalePointsNode.SetNthFiducialLabel(PatientScalePointCounter, ModelScalePointLabel)
+            PatientScalePointCounter += 1
       #print CorrespondingLandmarksNode
       return (CorrespondingLandmarksNode, CorrespondingScalePointsNode)
       
+  # Actual program
   def AnchorPointSets(self):
-    
     # Anatomy models, patient and average model
-    self.PatientAnatomy = self.Patient(self, self.OriginalPatientPoints, self.PatientRegistrationPointsNode, self.PatientScalePointsNode)
-    self.ModelAnatomy = self.Model(self, self.PatientAnatomy, self.OriginalModelPoints, self.ModelRegistrationPointsNode, self.AllModelScalePointsNode)
-    
-    #self.ComputeOffsetUnitVectors(self.ModelAnatomy)
-    #self.ComputeOffsetUnitVectors(self.PatientAnatomy)
+    if self.UseScalingPoints:
+      self.PatientAnatomy = self.Patient(self, self.OriginalPatientPoints, self.PatientRegistrationPointsNode, self.PatientScalePointsNode)
+      self.ModelAnatomy = self.Model(self, self.PatientAnatomy, self.OriginalModelPoints, self.ModelRegistrationPointsNode, self.AllModelScalePointsNode)
+    else:
+      self.PatientAnatomy = self.Patient(self, self.OriginalPatientPoints, self.PatientRegistrationPointsNode)
+      self.ModelAnatomy = self.Model(self, self.PatientAnatomy, self.OriginalModelPoints, self.ModelRegistrationPointsNode)
     
     if self.UseVertebraWiseScaling or self.UseAverageScaling:
-      self.ComputeLocalAnatomicScalingFactors()
+      self.ComputeScalingFactorsFromTransverseProcesses(self.ModelAnatomy)
+      self.ComputeScalingFactorsFromTransverseProcesses(self.PatientAnatomy)
       
     if self.UseScalingPoints:
       self.ComputeScalingFactorsFromScalePoints(self.ModelAnatomy)
       self.ComputeScalingFactorsFromScalePoints(self.PatientAnatomy)
     
+    #self.ScalePatientToModel(self.PatientAnatomy, self.ModelAnatomy)
+    
     self.AddAnchorPoints(self.ModelAnatomy)
     self.AddAnchorPoints(self.PatientAnatomy)
 
   """
-    # Construct a point set at patient-spine space of points with correspondence
-    self.AnchorPatientSpine()
-
-    # Construct a point set at average-spine model of points with correspondence
-    self.AnchorModelSpine()
-    
-    
-    if(len(self.NamesIntersection) == 0):   # For whatever reason, no points in common could be found between the CT and atlas
-      print "Warning - intersection of CT and atlas points is the empty set."
-      print "   Maybe points are named incorrectly."
-      print "   Correspondence lists not genereated."
-      return
-    
-    print "\n Intersection of CT and atlas landmarks:"
-    for i, name in enumerate(self.NamesIntersection[:-1]):
-      if((name[:-1] == self.NamesIntersection[i+1][:-1]) and (name[-1] != self.NamesIntersection[i+1][-1])):
-        print name + "  " + self.NamesIntersection[i+1]
-          
-      else:
-        if(i>0 and ((name[:-1] + "L" not in self.NamesIntersection) or (name[:-1] + "R" not in self.NamesIntersection))):
-          print name
-
-    # This should fix bug where last landmark is not printed if it has no partner
-    if(self.NamesIntersection[-1][:-1] != self.NamesIntersection[-2][:-1]): # and (self.NamesIntersection[-1][-1] != self.NamesIntersection))
-      print self.NamesIntersection[-1]
-    return    
-
-  def CheckNamingConvention(self, Anatomy):
-
-    self.PatientPointNames = [x[0] for x in self.PatientRegistrationPoints]
-    for PatientScalePoint in self.PatientRegistrationPoints:
-      if PatientScalePoint[0] not in self.ValidTrPNames:
-
-      if(self.PatientPointNames.count(PatientScalePoint[0]) != 1):
-        print "Duplicated point present in input."
-        NamesValid = False
-        return NamesValid
-    
-    if self.UseScalingPoints:
-      for PatientScalePoint in self.PatientScalePoints:
-        if PatientScalePoint[0] not in self.ValidScalePointNames:
-          print "Scale point naming convention not followed."
-          print " Name " + PatientScalePoint[0] + " not allowed."
-          NamesValid = False
-          return NamesValid
-    return NamesValid
-    
-
-  def OrderPoints(self):
-    self.ThoracicPoints = []
-    self.LumbarPoints = []
-    for PatientPoint in self.PatientRegistrationPoints:
-      if PatientPoint[0][0] == "T":
-        self.ThoracicPoints.append((PatientPoint[0][1:], PatientPoint[1], int(PatientPoint[0][1:-1])))
-      else:
-        self.LumbarPoints.append((PatientPoint[0][1:], PatientPoint[1], int(PatientPoint[0][1:-1])))
-        
-    self.ThoracicPoints.sort(key=lambda tup: tup[2])
-    self.LumbarPoints.sort(key=lambda tup: tup[2])
-    for i, ThoracicPoint in enumerate(self.ThoracicPoints):
-      self.ThoracicPoints[i] = ("T" + ThoracicPoint[0], ThoracicPoint[1])
-    for i, LumbarPoint in enumerate(self.LumbarPoints):
-      self.LumbarPoints[i] = ("L" + LumbarPoint[0], LumbarPoint[1])
-    
-    self.PatientRegistrationPoints = self.ThoracicPoints + self.LumbarPoints
-    self.CtNames = [x[0] for x in self.PatientRegistrationPoints]
-    return
-
     
   def EstablishCorrespondence(self):
     for i, PatientPoint in enumerate(self.PatientRegistrationPoints):
@@ -560,45 +481,56 @@ class ModelToPatientRegistrationLogic:
         CurrentLabel = self.AllModelScalePointsNode.GetNthFiducialLabel(i)
         CurrentPoint = self.AllModelScalePointsNode.GetMarkupPointVector(i, 0)
         self.ModelScalePoints.append((CurrentLabel, CurrentPoint))
-
+  """
   
   def ComputeOffsetUnitVectors(self, Anatomy):
     import numpy as np
+    
     # Treat top (superior-most) boundary condition
     # This method can also search through the rest of the spine, eliminating the boundary condition
     LeftTopSearch = 0
-    #print Anatomy.LandmarksNode
-    while Anatomy.LandmarksNode.GetNthFiducialLabel(LeftTopSearch)[-1] != "L":
+    LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(LeftTopSearch)
+    while LandmarkLabel[-1] != "L":
       LeftTopSearch += 1
-    TopLeftPoint = (Anatomy.LandmarksNode.GetNthFiducialLabel(LeftTopSearch), Anatomy.LandmarksNode.GetMarkupPointVector(LeftTopSearch, 0))
+      LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(LeftTopSearch)
+    (TopLeftLabel, TopLeftCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(LeftTopSearch), Anatomy.LandmarksNode.GetMarkupPointVector(LeftTopSearch, 0))
+    
     SecondLeftSearch = LeftTopSearch + 1
-    while Anatomy.LandmarksNode.GetNthFiducialLabel(SecondLeftSearch)[-1] != "L":
+    LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(SecondLeftSearch)
+    while LandmarkLabel[-1] != "L":
       SecondLeftSearch += 1
-    SecondLeftPoint = (Anatomy.LandmarksNode.GetNthFiducialLabel(SecondLeftSearch), Anatomy.LandmarksNode.GetMarkupPointVector(SecondLeftSearch, 0))
+      LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(SecondLeftSearch)
+    (SecondLeftLabel, SecondLeftCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(SecondLeftSearch), Anatomy.LandmarksNode.GetMarkupPointVector(SecondLeftSearch, 0))
     
+    # Same thing to find the right-side top boundary condition
     RightTopSearch = 0
-    while Anatomy.LandmarksNode.GetNthFiducialLabel(RightTopSearch)[-1] != "R":
+    LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(RightTopSearch)
+    while LandmarkLabel[-1] != "R":
       RightTopSearch += 1
-    TopRightPoint = (Anatomy.LandmarksNode.GetNthFiducialLabel(RightTopSearch), Anatomy.LandmarksNode.GetMarkupPointVector(RightTopSearch, 0))
-    SecondRightSearch = RightTopSearch + 1
-    while Anatomy.LandmarksNode.GetNthFiducialLabel(SecondRightSearch)[-1] != "R":
-      SecondRightSearch += 1
-    SecondRightPoint = (Anatomy.LandmarksNode.GetNthFiducialLabel(SecondRightSearch), Anatomy.LandmarksNode.GetMarkupPointVector(SecondRightSearch, 0))
+      LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(RightTopSearch)
+    (TopRightLabel, TopRightCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(RightTopSearch), Anatomy.LandmarksNode.GetMarkupPointVector(RightTopSearch, 0))
     
-    print (TopLeftPoint[0], TopRightPoint[0])
+    SecondRightSearch = RightTopSearch + 1
+    LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(SecondRightSearch)
+    while LandmarkLabel[-1] != "R":
+      SecondRightSearch += 1
+      LandmarkLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(SecondRightSearch)
+    (SecondRightLabel, SecondRightCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(SecondRightSearch), Anatomy.LandmarksNode.GetMarkupPointVector(SecondRightSearch, 0))
+    
+    print (TopLeftLabel, TopRightLabel)
     
     # Top-end boundary requires only Top and Middle points
     CurrentAxialVector = [0, 0, 0]
     CurrentLateralVector = [0, 0, 0]
     for dim in range(3):
-      CurrentAxialVector[dim] = ((TopLeftPoint[1][dim] - SecondLeftPoint[1][dim]) + (TopRightPoint[1][dim] - SecondRightPoint[1][dim])) / 2.0
-      CurrentLateralVector[dim] = TopRightPoint[1][dim] - TopLeftPoint[1][dim]
+      CurrentAxialVector[dim] = ((TopLeftCoords[dim] - SecondLeftCoords[dim]) + (TopRightCoords[dim] - SecondRightCoords[dim])) / 2.0
+      CurrentLateralVector[dim] = TopRightCoords[dim] - TopLeftCoords[dim]
     
     CurrentOffsetVector = np.cross(CurrentAxialVector, CurrentLateralVector)
     OffsetVectorNorm = np.linalg.norm(CurrentOffsetVector)
     for dim in range(3):
       CurrentOffsetVector[dim] = CurrentOffsetVector[dim] / OffsetVectorNorm
-    print " " + str(CurrentOffsetVector)
+    #print " " + str(CurrentOffsetVector)
     
     # Append OffsetVector twice, once for each top point ASSUMES FIRST TWO POINTS IN LANDMARKS ARE TOP LEFT AND TOP RIGHT - defeats purpose of above search
     # Consider having one offset vector per vertebra
@@ -643,14 +575,14 @@ class ModelToPatientRegistrationLogic:
       
       for dim in range(3):
         CurrentOffsetVector[dim] = CurrentOffsetVector[dim] / OffsetVectorNorm
-      print " " + str(CurrentOffsetVector)
+      #print " " + str(CurrentOffsetVector)
 
       # Append OffsetVector twice, once for each top point ASSUMES FIRST TWO POINTS IN LANDMARKS ARE TOP LEFT AND TOP RIGHT - defeats purpose of above search
       # Consider having one offset vector per vertebra
       Anatomy.AnchorOffsetDirectionVectors.append(CurrentOffsetVector)
       Anatomy.AnchorOffsetDirectionVectors.append(CurrentOffsetVector)
     
-    
+    # Bottom points are a boundary condition, like the top
     LeftBottomSearch = Anatomy.LandmarksNode.GetNumberOfFiducials() - 1
     while Anatomy.LandmarksNode.GetNthFiducialLabel(LeftBottomSearch)[-1] != "L":
       LeftBottomSearch -= 1
@@ -668,6 +600,7 @@ class ModelToPatientRegistrationLogic:
     SecondLastRightPoint = (Anatomy.LandmarksNode.GetNthFiducialLabel(SecondLastRightIndex), Anatomy.LandmarksNode.GetMarkupPointVector(SecondLastRightIndex, 0))
     
     print (LeftBottomPoint[0], RightBottomPoint[0])
+    print ""
     
     CurrentAxialVector = [0, 0, 0]
     CurrentLateralVector = [0, 0, 0]
@@ -679,160 +612,134 @@ class ModelToPatientRegistrationLogic:
     OffsetVectorNorm = np.linalg.norm(CurrentOffsetVector)
     for dim in range(3):
       CurrentOffsetVector[dim] = CurrentOffsetVector[dim] / OffsetVectorNorm
-    print " " + str(CurrentOffsetVector)  
+    #print " " + str(CurrentOffsetVector)  
       
     Anatomy.AnchorOffsetDirectionVectors.append(CurrentOffsetVector)
     Anatomy.AnchorOffsetDirectionVectors.append(CurrentOffsetVector)
-      
-
-    for PatientPoint in self.PatientRegistrationPointsLeft:
-      self.PatientSupInfVectorsLeft.append(self.ComputeSupInfVector(PatientPoint, self.PatientRegistrationPointsLeft))
-      self.PatientRightLeftVectorsLeft.append(self.ComputeRightLeftVector(PatientPoint, self.PatientRegistrationPointsRight))
-      self.PatientAntPostVectorsLeft.append(numpy.cross(self.PatientRightLeftVectorsLeft[-1], self.PatientSupInfVectorsLeft[-1]))
-    for PatientPoint in self.PatientRegistrationPointsRight:
-      self.PatientSupInfVectorsRight.append(self.ComputeSupInfVector(PatientPoint, self.PatientRegistrationPointsRight))
-      self.PatientRightLeftVectorsRight.append(self.ComputeRightLeftVector(PatientPoint, self.PatientRegistrationPointsLeft))
-      self.PatientAntPostVectorsRight.append(numpy.cross(self.PatientRightLeftVectorsRight[-1], self.PatientSupInfVectorsRight[-1]))
-    for ModelPoint in self.ModelRegistrationPointsLeft:
-      self.ModelSupInfVectorsLeft.append(self.ComputeSupInfVector(ModelPoint, self.ModelRegistrationPointsLeft))
-      self.ModelRightLeftVectorsLeft.append(self.ComputeRightLeftVector(ModelPoint, self.ModelRegistrationPointsRight))
-      self.ModelAntPostVectorsLeft.append(numpy.cross(self.ModelRightLeftVectorsLeft[-1], self.ModelSupInfVectorsLeft[-1]))
-    for ModelPoint in self.ModelRegistrationPointsRight:
-      self.ModelSupInfVectorsRight.append(self.ComputeSupInfVector(ModelPoint, self.ModelRegistrationPointsRight))
-      self.ModelRightLeftVectorsRight.append(self.ComputeRightLeftVector(ModelPoint, self.ModelRegistrationPointsLeft))
-      self.ModelAntPostVectorsRight.append(numpy.cross(self.ModelRightLeftVectorsRight[-1], self.ModelSupInfVectorsRight[-1]))
-  """
 
   def FindNegihborPointBelow(self, Anatomy, Point):   # Point is of the form ('Label', index) --- returns PointSearchIndex, indicating neighbor location
+    OriginalLabel = Point[0]
     PointSearchIndex = Point[1] + 1                   # Start at Point location, for speed
-    while Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex)[-1] != Point[0][-1]:
+    CandidateLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex)
+    
+    while CandidateLabel[-1] != OriginalLabel[-1]:
       #print Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex)
       if PointSearchIndex >= Anatomy.LandmarksNode.GetNumberOfFiducials():
-        print "ERROR - could not find neighbor below " + Point[0]
+        print "ERROR - could not find neighbor below " + OriginalLabel
         print " Returning nothing - results invalid"
         return
       PointSearchIndex += 1
+      CandidateLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex)
     return PointSearchIndex
     
   def FindNegihborPointAbove(self, Anatomy, Point):   # Point is of the form ('Label', index) --- returns PointSearchIndex, indicating neighbor location
+    OriginalLabel = Point[0]
     PointSearchIndex = Point[1] - 1                   # Start at Point location, for speed
-    while Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex)[-1] != Point[0][-1]:
+    CandidateLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex)
+    
+    #print (Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex), Point)
+    while CandidateLabel[-1] != OriginalLabel[-1]:
       #print (Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex), Point)
       if PointSearchIndex < 0:
         print "ERROR - could not find neighbor above " + Point[0]
         print " Returning nothing - results invalid"
         return
       PointSearchIndex -= 1
+      CandidateLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchIndex)
     return PointSearchIndex
     
   def FindNegihborPointBeside(self, Anatomy, Point):
+    OriginalLabel = Point[0]
     PointSearchUpIndex = Point[1] - 1       # Search out from start point, up and down, for speed
+    CandidateUpLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchUpIndex)
     PointSearchDownIndex = Point[1] + 1
-    #print "SearchUp: " + str((Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchUpIndex)[:-1], Point[0][:-1]))
-    #print "SearchDown" + str((Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchDownIndex)[:-1], Point[0][:-1]))
-    while Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchUpIndex)[:-1] != Point[0][:-1] and Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchDownIndex)[:-1] != Point[0][:-1]:
+    CandidateDownLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchDownIndex)
+    
+    while CandidateUpLabel[:-1] != OriginalLabel[:-1] and CandidateDownLabel[:-1] != OriginalLabel[:-1]:
       #print "SearchUp: " + str((Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchUpIndex), Point[0]))
       #print "SearchDown: " + str((Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchDownIndex), Point[0]))
       if PointSearchUpIndex > 0:
         PointSearchUpIndex -= 1
       if PointSearchDownIndex < Anatomy.LandmarksNode.GetNumberOfFiducials()-1:
         PointSearchDownIndex += 1
+      CandidateUpLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchUpIndex)
+      CandidateDownLabel = Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchDownIndex)
       #print "SearchUpIndex: " + str(PointSearchUpIndex)
       #print "SearchDownIndex: " + str(PointSearchDownIndex)
-    if Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchUpIndex)[:-1] == Point[0][:-1]:
+    if CandidateUpLabel[:-1] == Point[0][:-1]:
       return PointSearchUpIndex
-    if Anatomy.LandmarksNode.GetNthFiducialLabel(PointSearchDownIndex)[:-1] == Point[0][:-1]:
+    if CandidateDownLabel[:-1] == Point[0][:-1]:
       return PointSearchDownIndex
     print "ERROR - could not find symmetric partner for " + Point[0]
     print " Returning nothing - results invalid"
     return
-  
-  """
-  def ComputeSupInfVector(self, Point, PointSet):
-    import math
-    SupInfVector = [0, 0, 0]
+
+  def ComputeScalingFactorsFromTransverseProcesses(self, Anatomy):      # ASSUMES TOP TWO POINTS ARE LEFT AND RIGHT NEIGHBORS
     
-    if Point[0] == PointSet[0][0]:
-      # Boundary conition, top point
-      for dim in range(3):
-        SupInfVector[dim] += PointSet[1][1][dim] - Point[1][dim]
-    elif Point[0] == PointSet[-1][0]:
-      # Boundary condition, bottom point
-      for dim in range(3):
-        SupInfVector[dim] += Point[1][dim] - PointSet[-2][1][dim]
-    else:
-      # Non-bounary, expecting a point above and below
-      SearchIterator = 1
-      while Point[0] != PointSet[SearchIterator][0]: # Search by label until point is found
-        SearchIterator += 1
-        if SearchIterator > len(PointSet):
-          print "Error - could not compute SupInfVector for point " + Point[0]
-          print " Point not found in registration points - Returning 0-vector."
-          return [0,0,0]
-      for dim in range(3):
-        # Use average since we have points above and below
-        SupInfVector[dim] += ((Point[1][dim] - PointSet[SearchIterator - 1][1][dim]) + (PointSet[SearchIterator + 1][1][dim] - Point[1][dim])) / 2.0
-   
-    return SupInfVector
-    
-  def ComputeRightLeftVector(self, Point, ParallelPointSet):
-    import math
-    RightLeftVecor = [0, 0, 0]
-    SearchIterator = 0
-    
-    while Point[0][:-1] != ParallelPointSet[SearchIterator][0][:-1]:    # Compare labels from beginning, slow
-      SearchIterator += 1
-      if SearchIterator > len(ParallelPointSet):
-        print "Error - could not find point symmetric to point " + Point[0]
-        print " Point not found in registration points - Returning 0-vector."
-        return [0,0,0]
-    for dim in range(3):
-      RightLeftVecor[dim] = ParallelPointSet[SearchIterator][1][dim] - Point[1][dim]
-      
-    if Point[0][-1] == "R":
-      # Ensure vectors are always Left to Right, convention for easy crossing
-      for i, Coord in enumerate(RightLeftVecor):
-        RightLeftVecor[i] = -1 * Coord
-        
-    return RightLeftVecor
-  """
-  def ComputeLocalAnatomicScalingFactors(self):
-    import numpy
     if self.UseVerticalScaling:
       # Uses lengths of SupInfVectors as anatomic scaling factors
       SumPatientScalingFactors = 0
       SumModelScalingFactors = 0
-      for i in range(len(self.PatientRegistrationPointsLeft)):
-        self.PatientScalingFactorsLeft.append(numpy.linalg.norm(self.PatientSupInfVectorsLeft[i]))
-        SumPatientScalingFactors += self.PatientScalingFactorsLeft[-1]
-      for i in range(len(self.PatientRegistrationPointsRight)):
-        self.PatientScalingFactorsRight.append(numpy.linalg.norm(self.PatientSupInfVectorsRight[i]))
-        SumPatientScalingFactors += self.PatientScalingFactorsRight[-1]
-      for i in range(len(self.ModelRegistrationPointsLeft)):
-        self.ModelScalingFactorsLeft.append(numpy.linalg.norm(self.ModelSupInfVectorsLeft[i]))
-        SumModelScalingFactors += self.ModelScalingFactorsLeft[-1]
-      for i in range(len(self.ModelRegistrationPointsRight)):
-        self.ModelScalingFactorsRight.append(numpy.linalg.norm(self.ModelSupInfVectorsRight[i]))
-        SumModelScalingFactors += self.ModelScalingFactorsRight[-1]
+      NumLandmarks = Anatomy.LandmarksNode.GetNumberOfFiducials()
       
-      if self.UseAverageScaling:
-        AveragePatientScalingFactor = SumPatientScalingFactors / (len(self.PatientScalingFactorsLeft) + len(self.PatientScalingFactorsRight))
-        AverageModelScalingFactor = SumModelScalingFactors / (len(self.ModelScalingFactorsLeft) + len(self.ModelScalingFactorsRight))
-        for i in range(len(self.PatientScalingFactorsLeft)):
-          self.PatientScalingFactorsLeft[i] = AveragePatientScalingFactor
-        for i in range(len(self.PatientScalingFactorsRight)):
-          self.PatientScalingFactorsRight[i] = AveragePatientScalingFactor
-        for i in range(len(self.ModelScalingFactorsLeft)):
-          self.ModelScalingFactorsLeft[i] = AverageModelScalingFactor
-        for i in range(len(self.ModelScalingFactorsRight)):
-          self.ModelScalingFactorsRight[i] = AverageModelScalingFactor
+      # Top of spine has boundary condition, points only have one vertical neighbor, below
+      (TopLeftLabel, TopLeftCoords) = Anatomy.LandmarksNode.GetNthFiducialLabel(0), Anatomy.LandmarksNode.GetMarkupPointVector(0,0)
+      SecondLeftIndex = self.FindNegihborPointBelow(Anatomy, (TopLeftLabel, 0))
+      (SecondLeftLabel, SecondLeftCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(SecondLeftIndex), Anatomy.LandmarksNode.GetMarkupPointVector(SecondLeftIndex,0))
+      TopLeftSupInfVector = [0,0,0]
+      for dim in range(3):
+        TopLeftSupInfVector[dim] = TopLeftCoords[dim] - SecondLeftCoords[dim]
+      Anatomy.AnchorOffsetScaleFactors.append(np.linalg.norm(TopLeftSupInfVector))
+      
+      (TopRightLabel, TopRightCoords) = Anatomy.LandmarksNode.GetNthFiducialLabel(1), Anatomy.LandmarksNode.GetMarkupPointVector(1,0)
+      SecondRightIndex = self.FindNegihborPointBelow(Anatomy, (TopRightLabel, 1))
+      (SecondRightLabel, SecondRightCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(SecondRightIndex), Anatomy.LandmarksNode.GetMarkupPointVector(SecondRightIndex,0))
+      TopRightSupInfVector = [0,0,0]
+      for dim in range(3):
+        TopRightSupInfVector[dim] = TopRightCoords[dim] - SecondRightCoords[dim]
+      Anatomy.AnchorOffsetScaleFactors.append(np.linalg.norm(TopRightSupInfVector))
+      
+      for j, (MidLandmarkLabel, MidLandmarkCoords) in enumerate(zip([Anatomy.LandmarksNode.GetNthFiducialLabel(i) for i in range(1, NumLandmarks-3)], [Anatomy.LandmarksNode.GetMarkupPointVector(i, 0) for i in range(1, NumLandmarks-3)])):
+        AboveLandmarkIndex = self.FindNegihborPointAbove(Anatomy, (MidLandmarkLabel, j+2))
+        (AboveLandmarkLabel, AboveLandmarkCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(AboveLandmarkIndex), Anatomy.LandmarksNode.GetMarkupPointVector(AboveLandmarkIndex,0))
+        AboveSupInfVector = [0,0,0]
+        for dim in range(3):
+          AboveSupInfVector[dim] = AboveLandmarkCoords[dim] - MidLandmarkCoords[dim]
         
-      for i in range(len(self.PatientScalingFactorsLeft)):
-        # The multiplication by * (AveragePatientScalingFactor / AverageModelScalingFactor) is the VSF, to factor in the relative lengths of model/patient
-        self.PatientScalingFactorsLeft[i] = self.PatientScalingFactorsLeft[i] * (self.PatientScalingFactorsLeft[i] / self.ModelScalingFactorsLeft[i])
-      for i in range(len(self.PatientScalingFactorsRight)):
-        self.PatientScalingFactorsRight[i] = self.PatientScalingFactorsRight[i] * (self.PatientScalingFactorsRight[i] / self.ModelScalingFactorsRight[i])
- 
+        BelowLandmarkIndex = self.FindNegihborPointBelow(Anatomy, (MidLandmarkLabel, j+2))
+        (BelowLandmarkLabel, BelowLandmarkCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(BelowLandmarkIndex), Anatomy.LandmarksNode.GetMarkupPointVector(BelowLandmarkIndex,0))
+        BelowSupInfVector = [0,0,0]
+        for dim in range(3):
+          BelowSupInfVector[dim] = MidLandmarkCoords[dim] - BelowLandmarkCoords[dim]
+          
+        MeanSupInfVector = [0,0,0]
+        for dim in range(3):
+          MeanSupInfVector[dim] = (AboveSupInfVector[dim] + BelowSupInfVector[dim]) / 2.0
+        Anatomy.AnchorOffsetScaleFactors.append(np.linalg.norm(MeanSupInfVector))
+      
+      # Last two landmark points in spine are a boundary condition, each having only one vertical neighbor, above
+      (BottomLeftLabel, BottomLeftCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(NumLandmarks-2), Anatomy.LandmarksNode.GetMarkupPointVector(NumLandmarks-2,0))
+      PenultimateLeftIndex = self.FindNegihborPointAbove(Anatomy, (BottomLeftLabel, NumLandmarks-2))
+      (PenultimateLeftLabel, PenultimateLeftCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(PenultimateLeftIndex), Anatomy.LandmarksNode.GetMarkupPointVector(PenultimateLeftIndex,0))
+      BottomLeftSupInfVector = [0,0,0]
+      for dim in range(3):
+        BottomLeftSupInfVector[dim] = PenultimateLeftCoords[dim] - BottomLeftCoords[dim]
+      Anatomy.AnchorOffsetScaleFactors.append(np.linalg.norm(BottomLeftSupInfVector))
+      
+      (BottomRightLabel, BottomRightCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(NumLandmarks-1), Anatomy.LandmarksNode.GetMarkupPointVector(NumLandmarks-1,0))
+      PenultimateRightIndex = self.FindNegihborPointAbove(Anatomy, (BottomRightLabel, NumLandmarks-1))
+      (PenultimateRightLabel, PenultimateRightCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(PenultimateRightIndex), Anatomy.LandmarksNode.GetMarkupPointVector(PenultimateRightIndex,0))
+      BottomRightSupInfVector = [0,0,0]
+      for dim in range(3):
+        BottomRightSupInfVector[dim] = PenultimateRightCoords[dim] - BottomRightCoords[dim]
+      Anatomy.AnchorOffsetScaleFactors.append(np.linalg.norm(BottomRightSupInfVector))
+      
+      # Use the average of the individual scaling factors, if specified
+      if self.UseAverageScaling:
+        IndividualScalingFactors = Anatomy.AnchorOffsetScaleFactors
+        AveragedScalingFactor = np.mean(IndividualScalingFactors)
+        Anatomy.AnchorOffsetScaleFactors = NumLandmarks * [AveragedScalingFactor]
+
   def ComputeScalingFactorsFromScalePoints(self, Anatomy):
     # Computes offset magnitudes as distance between CurrentVertebraAveragePostPoint and CurrentVertebraAverageAntPoint
     # Assumes all TrPs have symmetric partners, and all corresponding scale points are present
@@ -840,91 +747,53 @@ class ModelToPatientRegistrationLogic:
     CurrentVertebraAverageAntPoint = [0, 0, 0]
     CurrentVertebraAveragePostPoint = [0, 0, 0]
     AntPostScaleVector = [0, 0, 0]
+    
+    NumScalePoints = Anatomy.ScalePointsNode.GetNumberOfFiducials
+    NumLandmarkPoints = Anatomy.LandmarksNode.GetNumberOfFiducials()
+    
     for (VertebraAnt, VertebraPost) in zip(range(0, Anatomy.ScalePointsNode.GetNumberOfFiducials() - 1, 2), range(0, Anatomy.LandmarksNode.GetNumberOfFiducials() - 1, 2)):
+    #for i, (SupScalePoint, InfScalePoint) in enumerate(zip([(Anatomy.ScalePointsNode.GetNthFiducialLabel(i), Anatomy.ScalePointsNode.GetMarkupPointVector(i,0)) for i in range(0, NumScalePoints-1, 2)], [(Anatomy.ScalePointsNode.GetNthFiducialLabel(i), Anatomy.ScalePointsNode.GetMarkupPointVector(i,0)) for i in range(0, NumScalePoints-1, 2)]))
+      #(SupScalePointLabel, SupScalePointCoords) = SupScalePoint
+      #(InfScalePointLabel, InfScalePointCoords) = InfScalePoint
       SupScalePoint = (Anatomy.ScalePointsNode.GetNthFiducialLabel(VertebraAnt), Anatomy.ScalePointsNode.GetMarkupPointVector(VertebraAnt, 0))
       InfScalePoint = (Anatomy.ScalePointsNode.GetNthFiducialLabel(VertebraAnt + 1), Anatomy.ScalePointsNode.GetMarkupPointVector(VertebraAnt + 1, 0))
-      LeftTrP = (Anatomy.LandmarksNode.GetNthFiducialLabel(VertebraPost), Anatomy.LandmarksNode.GetMarkupPointVector(VertebraPost, 0))
-      RightTrP = (Anatomy.LandmarksNode.GetNthFiducialLabel(VertebraPost + 1), Anatomy.LandmarksNode.GetMarkupPointVector(VertebraPost + 1, 0))
+      (LeftTrPLabel, LeftTrPCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(i), Anatomy.LandmarksNode.GetMarkupPointVector(i, 0))
+      (RightTrPLabel, RightTrPCoords) = (Anatomy.LandmarksNode.GetNthFiducialLabel(i + 1), Anatomy.LandmarksNode.GetMarkupPointVector(i + 1, 0))
       for dim in range(3):
-        CurrentVertebraAverageAntPoint[dim] = (SupScalePoint[1][dim] + InfScalePoint[1][dim]) / 2.0
-        CurrentVertebraAveragePostPoint[dim] = (LeftTrP[1][dim] + RightTrP[1][dim]) / 2.0
+        CurrentVertebraAverageAntPoint[dim] = (SupScalePointCoords[dim] + InfScalePointCoords[dim]) / 2.0
+        CurrentVertebraAveragePostPoint[dim] = (LeftTrPCoords[dim] + RightTrPCoords[dim]) / 2.0
         AntPostScaleVector[dim] = CurrentVertebraAverageAntPoint[dim] - CurrentVertebraAveragePostPoint[dim]
       #print np.linalg.norm(AntPostScaleVector)
-      Anatomy.AnchorOffsetScaleFactors[VertebraPost] = (np.linalg.norm(AntPostScaleVector)) # Once for the left anchor point
-      Anatomy.AnchorOffsetScaleFactors[VertebraPost + 1] = (np.linalg.norm(AntPostScaleVector)) # And once for the right
+      Anatomy.AnchorOffsetScaleFactors[i] = (np.linalg.norm(AntPostScaleVector)) # Once for the left anchor point
+      Anatomy.AnchorOffsetScaleFactors[i + 1] = (np.linalg.norm(AntPostScaleVector)) # And once for the right
     #print Anatomy.AnchorOffsetScaleFactors
   
   def AddAnchorPoints(self, Anatomy):
     # Assumes Anatomy's anchor offset magnitudes and directions are instantiated
-    print ""
-    print Anatomy
-    print Anatomy.AnchorOffsetDirectionVectors
-    print " "
-    print Anatomy.AnchorOffsetScaleFactors
-    print " "
+    #print ""
+    #print Anatomy
+    #print Anatomy.AnchorOffsetDirectionVectors
+    #print " "
+    #print Anatomy.AnchorOffsetScaleFactors
+    #print " "
     
     #print Anatomy.LandmarksNode
+    NumOriginalLandmarks = Anatomy.LandmarksNode.GetNumberOfFiducials()
     # Add original landmarks to RegistrationPoints
-    for LandmarkIndex in range(Anatomy.LandmarksNode.GetNumberOfFiducials()):
+    for LandmarkIndex in range(NumOriginalLandmarks):
       OriginalLandmarkPoint = (Anatomy.LandmarksNode.GetNthFiducialLabel(LandmarkIndex), Anatomy.LandmarksNode.GetMarkupPointVector(LandmarkIndex, 0))
       Anatomy.RegistrationPointsNode.AddFiducialFromArray(OriginalLandmarkPoint[1])
       Anatomy.RegistrationPointsNode.SetNthFiducialLabel(LandmarkIndex, OriginalLandmarkPoint[0])
 
     # Add anchor points to RegistrationPoints
-    for LandmarkIndex in range(Anatomy.LandmarksNode.GetNumberOfFiducials()):
+    for LandmarkIndex in range(NumOriginalLandmarks):
       OriginalLandmarkPoint = (Anatomy.LandmarksNode.GetNthFiducialLabel(LandmarkIndex), Anatomy.LandmarksNode.GetMarkupPointVector(LandmarkIndex, 0))
       CorrespondingAnchorCoord = [0, 0, 0]
       for dim in range(3):
         CorrespondingAnchorCoord[dim] = OriginalLandmarkPoint[1][dim] + (Anatomy.AnchorOffsetDirectionVectors[LandmarkIndex][dim] * Anatomy.AnchorOffsetScaleFactors[LandmarkIndex])
       CorrespondingAnchorPoint = (OriginalLandmarkPoint[0] + "A", CorrespondingAnchorCoord)
       Anatomy.RegistrationPointsNode.AddFiducialFromArray(CorrespondingAnchorCoord)
-      Anatomy.RegistrationPointsNode.SetNthFiducialLabel(LandmarkIndex, CorrespondingAnchorPoint[0])
-  
-  def AnchorPatientSpine(self):
-    import numpy
-    LeftIt = 0
-    RightIt = 0
-    for i in range(len(self.PatientRegistrationPoints)):
-      if self.PatientRegistrationPoints[i][0][-1] == "L":
-        AnchorPoint = (self.PatientRegistrationPoints[i][0] + "A", [0, 0, 0])
-        AntPostVectorNorm = numpy.linalg.norm(self.PatientAntPostVectorsLeft[LeftIt])
-        for dim in range(3):
-          AnchorPoint[1][dim] = self.PatientRegistrationPoints[i][1][dim] + (self.PatientAntPostVectorsLeft[LeftIt][dim] * self.PatientScalingFactorsLeft[LeftIt] / AntPostVectorNorm)
-        slicer.modules.ModelToPatientRegistrationWidget.ToOutputSelector.currentNode().AddFiducial(AnchorPoint[1][0], AnchorPoint[1][1], AnchorPoint[1][2])
-        slicer.modules.ModelToPatientRegistrationWidget.ToOutputSelector.currentNode().SetNthFiducialLabel(slicer.modules.ModelToPatientRegistrationWidget.ToOutputSelector.currentNode().GetNumberOfFiducials() - 1, AnchorPoint[0])
-        LeftIt += 1
-      else: #self.PatientRegistrationPoints[i][0][-1] == "R":
-        AnchorPoint = (self.PatientRegistrationPoints[i][0] + "A", [0, 0, 0])
-        AntPostVectorNorm = numpy.linalg.norm(self.PatientAntPostVectorsRight[RightIt])
-        for dim in range(3):
-          AnchorPoint[1][dim] = self.PatientRegistrationPoints[i][1][dim] + (self.PatientAntPostVectorsRight[RightIt][dim] * self.PatientScalingFactorsRight[RightIt] / AntPostVectorNorm)
-        slicer.modules.ModelToPatientRegistrationWidget.ToOutputSelector.currentNode().AddFiducial(AnchorPoint[1][0], AnchorPoint[1][1], AnchorPoint[1][2])
-        slicer.modules.ModelToPatientRegistrationWidget.ToOutputSelector.currentNode().SetNthFiducialLabel(slicer.modules.ModelToPatientRegistrationWidget.ToOutputSelector.currentNode().GetNumberOfFiducials() - 1, AnchorPoint[0])
-        RightIt += 1
-      self.PatientRegistrationPoints.append((AnchorPoint[0] + "A", [AnchorPoint[1][0], AnchorPoint[1][1], AnchorPoint[1][2]]))
-  
-  def AnchorModelSpine(self):
-    import numpy
-    LeftIt = 0
-    RightIt = 0
-    for i in range(len(self.ModelRegistrationPoints)):
-      if self.ModelRegistrationPoints[i][0][-1] == "L":
-        AnchorPoint = (self.ModelRegistrationPoints[i][0] + "A", [0, 0, 0])
-        AntPostVectorNorm = numpy.linalg.norm(self.ModelAntPostVectorsLeft[LeftIt])
-        for dim in range(3):
-          AnchorPoint[1][dim] = self.ModelRegistrationPoints[i][1][dim] + (self.ModelAntPostVectorsLeft[LeftIt][dim] * self.ModelScalingFactorsLeft[LeftIt] / AntPostVectorNorm)
-        slicer.modules.ModelToPatientRegistrationWidget.FromOutputSelector.currentNode().AddFiducial(AnchorPoint[1][0], AnchorPoint[1][1], AnchorPoint[1][2])
-        slicer.modules.ModelToPatientRegistrationWidget.FromOutputSelector.currentNode().SetNthFiducialLabel(slicer.modules.ModelToPatientRegistrationWidget.FromOutputSelector.currentNode().GetNumberOfFiducials() - 1, AnchorPoint[0])
-        LeftIt += 1
-      else: #self.ModelRegistrationPoints[i][0][-1] == "R":
-        AnchorPoint = (self.ModelRegistrationPoints[i][0] + "A", [0, 0, 0])
-        AntPostVectorNorm = numpy.linalg.norm(self.ModelAntPostVectorsRight[RightIt])
-        for dim in range(3):
-          AnchorPoint[1][dim] = self.ModelRegistrationPoints[i][1][dim] + (self.ModelAntPostVectorsRight[RightIt][dim] * self.ModelScalingFactorsRight[RightIt] / AntPostVectorNorm)
-        slicer.modules.ModelToPatientRegistrationWidget.FromOutputSelector.currentNode().AddFiducial(AnchorPoint[1][0], AnchorPoint[1][1], AnchorPoint[1][2])
-        slicer.modules.ModelToPatientRegistrationWidget.FromOutputSelector.currentNode().SetNthFiducialLabel(slicer.modules.ModelToPatientRegistrationWidget.FromOutputSelector.currentNode().GetNumberOfFiducials() - 1, AnchorPoint[0])
-        RightIt += 1
-      self.ModelRegistrationPoints.append((AnchorPoint[0] + "A", [AnchorPoint[1][0], AnchorPoint[1][1], AnchorPoint[1][2]]))
+      Anatomy.RegistrationPointsNode.SetNthFiducialLabel(NumOriginalLandmarks+LandmarkIndex, CorrespondingAnchorPoint[0])
     
 class ModelToPatientRegistrationTest:
   """
@@ -1018,506 +887,3 @@ class MarkupsNodeModificationLogic:
       self.OutputNode.AddFiducial(CurrentPoint[0], CurrentPoint[1], CurrentPoint[2])
       self.OutputNode.SetNthFiducialLabel(self.OutputNode.GetNumberOfFiducials()-1, self.MarkupsNode.GetNthFiducialLabel(i+1))
       print "Landmark " + self.OutputNode.GetNthFiducialLabel(self.OutputNode.GetNumberOfFiducials()-2) + " and " + self.OutputNode.GetNthFiducialLabel(self.OutputNode.GetNumberOfFiducials()-1) + " created."
-
-class IncompleteMarkupsNodeRepairLogic:
-  def __init__(self, Markups):
-    self.MarkupsNode = Markups
-    self.LeftMarkupsNode = slicer.vtkMRMLMarkupsFiducialNode()
-    self.RightMarkupsNode = slicer.vtkMRMLMarkupsFiducialNode()
-    self.LeftMarkupsNode.SetName(self.MarkupsNode.GetName() + 'Left')
-    self.RightMarkupsNode.SetName(self.MarkupsNode.GetName() + 'Right')
-
-    self.OriginalPoints = []
-    for i in range(Markups.GetNumberOfFiducials()):
-      self.OriginalPoints.append((Markups.GetNthFiducialLabel(i), Markups.GetMarkupPointVector(i,0)))
-    self.OriginalLabels = [i[0] for i in self.OriginalPoints]
-    self.OriginalCoords = [i[1] for i in self.OriginalPoints]
-  
-  def SortPointsVertically(self):
-    self.VerticallySortedPoints = sorted(self.OriginalPoints, key=lambda LabelCoords: LabelCoords[1][2])
-    self.VerticallySortedPoints.reverse()
-    #print self.VerticallySortedPoints
-  
-  def AnisotrpoicNormalization(self, PointSet):
-    # Start by finding top and bottom points of spine for verticle normalization
-    SetLeft = 10000
-    SetRight = -10000
-    SetFront = -10000
-    SetBack = 10000
-    SetTop = -10000
-    SetBottom = 10000
-
-    for Point in PointSet:
-      Coords  = Point[1]
-      if Coords[0] < SetLeft:
-        SetLeft = Coords[0]
-      if Coords[0] > SetRight:
-        SetRight = Coords[0]
-      if Coords[1] < SetBack:
-        SetBack = Coords[1]
-      if Coords[1] > SetFront:
-        SetFront = Coords[1]
-      if Coords[2] > SetTop:
-        SetTop = Coords[2]
-      if Coords[2] < SetBottom:
-        SetBottom = Coords[2]
-      
-    SetHeight = SetTop - SetBottom
-    SetWidth = SetRight - SetLeft
-    SetDepth = SetFront - SetBack
-    
-    # (Re) initialize normalized point list
-    NormalizedPoints = len(PointSet) * [0]
-    
-    # Normalize S-I dimension to R-L scale
-    for i, Point in enumerate(PointSet):
-      Coords = Point[1]
-      NormalizedPoints[i] = np.array([Coords[0], (Coords[1]) * (SetWidth / (SetDepth * 3.0)), (Coords[2]) * (SetWidth / (SetHeight * 2.0))])
-    return NormalizedPoints
-  
-  def ShouldStopKMeans(self, oldCentroids, Centroids, iterations):
-    MaxIterations = 500
-    StoppingDelta = 0.05
-    #print oldCentroids, Centroids
-    if iterations > MaxIterations: return True
-    if iterations == 0:
-      return False
-    for C in range(len(oldCentroids)):
-      #print oldCentroids[C], Centroids[C]
-      if np.linalg.norm(oldCentroids[C] - Centroids[C]) < StoppingDelta:
-        return True
-    return False
-
-  def GetKMeansLabels(self, DataSet, Centroids, Labels):
-    for i, Coords in enumerate(DataSet):
-      #PointCentroidDistance = np.linalg.norm(Coords - Centroids[0])
-      minDist = 1000000
-      Labels[i] = 0
-      for j, CentroidVector in enumerate(Centroids):
-        #print Coords, CentroidVector#, np.linalg.norm(Coords - CentroidVector)
-        PointCentroidDistance = np.linalg.norm(Coords - CentroidVector)
-        if PointCentroidDistance < minDist:
-          minDist = PointCentroidDistance
-          Labels[i] = j
-    return Labels
-
-  def GetCentroids(self, DataSet, Labels, k):
-    Centroids = []
-    #print Labels
-    for C in range(k):    # For each centroid
-      Centroid = np.random.uniform() * np.ones(len(DataSet[0]))    # Each centroid with as many dimensions as the data
-      
-      for i, Coords in enumerate(DataSet): # Take each data point contributing to the centroid into consideration
-        if Labels[i] == C:                    # if it belongs to the current centroid
-          for dim in range(len(Centroid)):
-            Centroid[dim] += Coords[dim]
-            
-      for dim in range(len(Centroid)):
-        Centroid[dim] = Centroid[dim] / np.count_nonzero(Labels == C)
-      Centroids.append(Centroid)
-    return Centroids
-
-  def KMeans(self, DataSet, k=2):   # Expects DataSet as list of (Label, np.array[R,A,S]) tuples, uses k=2 by default for left and right sides
-    DataSetLabels = np.zeros(len(DataSet))
-    for i in range(len(DataSetLabels)):
-      DataSetLabels[i] = int(round(np.random.uniform()))
-    # Initialize centroids
-    numFeatures = len(DataSet[0])
-    Centroids = k * [0]
-    # Try initializing one centroid on each side
-    Centroids[0] = np.array([min([i[0] for i in DataSet]),0,0])
-    Centroids[1] = np.array([max([i[0] for i in DataSet]),0,0])
-    
-  # Initialize book keeping variables
-    iterations = 0
-    oldCentroids = k * [0]
-    for Cent in range(k):
-      oldCentroids[Cent] = np.array(numFeatures * [np.random.uniform()])
-
-    # Run the k-means algorithm
-    while not self.ShouldStopKMeans(oldCentroids, Centroids, iterations):
-      oldCentroids = Centroids
-      iterations += 1
-      
-      DataSetLabels = self.GetKMeansLabels(DataSet, Centroids, DataSetLabels)
-      Centroids = self.GetCentroids(DataSet, DataSetLabels, k)
-      #print Centroids
-    return (DataSetLabels, Centroids)
-    
-  def ClassifyLeftRight(self):
-    self.SortPointsVertically()
-    SortedPointsLeftVotes = len(self.VerticallySortedPoints) * [0]
-    SortedPointsRightVotes = len(self.VerticallySortedPoints) * [0]
-    for i in range(0, len(self.VerticallySortedPoints)-5):
-      #Sextuple = [np.array(k[1]) for k in self.VerticallySortedPoints[i:i+6]]
-      Sextuple = self.VerticallySortedPoints[i:i+6]
-      #print Sextuple
-      NormalizedSextuple = self.AnisotrpoicNormalization(Sextuple)
-      (KmLabels, KmCentroids) = self.KMeans(NormalizedSextuple, 2)
-
-      # If KmLabel == 0 indicates a left-side point
-      if KmCentroids[0][0] < KmCentroids[1][0]:
-        for j, Label in enumerate(KmLabels):
-          if Label == 0:
-            SortedPointsLeftVotes[i + j] = SortedPointsLeftVotes[i + j] + 1
-          else:
-            SortedPointsRightVotes[i + j] = SortedPointsRightVotes[i + j] + 1
-      else: # If KmLabel == 0 indicates a right-side point
-        for j, Label in enumerate(KmLabels):
-          #print i, j
-          if Label == 0:
-            SortedPointsRightVotes[i + j] = SortedPointsRightVotes[i + j] + 1
-          else:
-            SortedPointsLeftVotes[i + j] = SortedPointsLeftVotes[i + j] + 1
-
-    self.LeftMarkupsNode.RemoveAllMarkups()
-    self.RightMarkupsNode.RemoveAllMarkups()
-    
-    for i, UnclassifiedPoint in enumerate(self.VerticallySortedPoints):
-      OriginalPointIndex = self.OriginalLabels.index(UnclassifiedPoint[0])
-      OriginalPoint = self.OriginalCoords[OriginalPointIndex]
-      if SortedPointsLeftVotes[i] > SortedPointsRightVotes[i]:
-        self.LeftMarkupsNode.AddFiducialFromArray(OriginalPoint)
-        self.LeftMarkupsNode.SetNthFiducialLabel(self.LeftMarkupsNode.GetNumberOfFiducials()-1, self.VerticallySortedPoints[i][0] + '_Left')
-      else:
-        self.RightMarkupsNode.AddFiducialFromArray(OriginalPoint)
-        self.RightMarkupsNode.SetNthFiducialLabel(self.RightMarkupsNode.GetNumberOfFiducials()-1, self.VerticallySortedPoints[i][0] + '_Right')
-
-    if slicer.util.getNode(self.LeftMarkupsNode.GetName()) != None:
-      slicer.mrmlScene.RemoveNode(slicer.util.getNode(self.LeftMarkupsNode.GetName()))
-    if slicer.util.getNode(self.RightMarkupsNode.GetName()) != None:
-      slicer.mrmlScene.RemoveNode(slicer.util.getNode(self.RightMarkupsNode.GetName()))
-      
-    slicer.mrmlScene.AddNode(self.LeftMarkupsNode)
-    slicer.mrmlScene.AddNode(self.RightMarkupsNode)
-    
-  def PolyFit(self, Node, Plot=False):    # Meant to fit polynomial to right or left sideed landmarks, returns polynomial coefficients
-    PointsPerCurve = 500
-    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
-    R = [Coords[i][0] for i in range(len(Coords))]
-    A = [Coords[i][1] for i in range(len(Coords))]
-    S = [Coords[i][2] for i in range(len(Coords))]
-    
-    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
-
-    S_R_FitCoefs = np.polyfit(S, R, 5)
-    S_A_FitCoefs = np.polyfit(S, A, 4)
-    
-    SrPolynomial = np.poly1d(S_R_FitCoefs)
-    SaPolynomial = np.poly1d(S_A_FitCoefs)
-    
-    #print "SR fit:", SrPolynomial
-    #print "SA fit:", SaPolynomial
-    
-    if Plot:
-      OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
-      while OldCharts.GetItemAsObject(0) != None:
-        slicer.mrmlScene.RemoveNode(OldCharts.GetItemAsObject(0))
-        OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
-    
-      OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
-      while OldArrays.GetItemAsObject(0) != None:
-        slicer.mrmlScene.RemoveNode(OldArrays.GetItemAsObject(0))
-        OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
-        
-      #Creates chart view
-      lns = slicer.mrmlScene.GetNodesByClass('vtkMRMLLayoutNode')
-      
-      #Get chart view node
-      cvns = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartViewNode')
-      cvns.InitTraversal()
-      cvn = cvns.GetNextItemAsObject()
-      #Create chart node
-      cna = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
-      
-      aDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
-      aDomain = aDomainNode.GetArray()
-      aDomain.SetNumberOfTuples(PointsPerCurve)
-      aDomain.SetNumberOfComponents(2)
-      for i, s in enumerate(sSpace):
-        aDomain.SetComponent(i, 0, s)
-        aDomain.SetComponent(i, 1, SaPolynomial(s))
-        aDomain.SetComponent(i, 2, 0)
-      
-      aPointsNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
-      aPointsArray = aPointsNode.GetArray()
-      aPointsArray.SetNumberOfTuples(len(A))
-      aPointsArray.SetNumberOfComponents(2)
-      for i, (a, s) in enumerate(zip(A,S)):
-        aPointsArray.SetComponent(i, 0, s)
-        aPointsArray.SetComponent(i, 1, a)
-        aPointsArray.SetComponent(i, 2, 0)
-      
-      lns.InitTraversal()
-      ln = lns.GetNextItemAsObject()
-      ln.SetViewArrangement(24)
-      
-      cna.AddArray('S-A Polyfit', aDomainNode.GetID())
-      cna.AddArray('S-A Data', aPointsNode.GetID())
-
-      #Setting properties on the chart
-      cna.SetProperty('default', 'title', Node.GetName() + ' A-P')
-      cna.SetProperty('default', 'xAxisLabel', 'S-I')
-      cna.SetProperty('default', 'yAxisLabel', 'A-P')
-      
-      #Which chart to display
-      cvn.SetChartNodeID(cna.GetID())
-      
-      """
-      #Create chart node
-      cnr = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
-      
-      rSpace = np.linspace(S[0], S[-1], PointsPerCurve)
-      rDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
-      rDomain = rDomainNode.GetArray()
-      rDomain.SetNumberOfTuples(PointsPerCurve)
-      rDomain.SetNumberOfComponents(2)
-      for i, s in enumerate(sSpace):
-        rDomain.SetComponent(i, 0, s)
-        rDomain.SetComponent(i, 1, SrPolynomial(s))
-        
-      rPointsNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
-      rPointsArray = rPointsNode.GetArray()
-      rPointsArray.SetNumberOfTuples(len(R))
-      rPointsArray.SetNumberOfComponents(2)
-      for i, (r, s) in enumerate(zip(R,S)):
-        rPointsArray.SetComponent(i, 0, s)
-        rPointsArray.SetComponent(i, 1, r)
-      
-      #lns.InitTraversal()
-      #ln = lns.GetNextItemAsObject()
-      #ln.SetViewArrangement(24)
-      #cvns.InitTraversal()
-      #cvn = cvns.GetNextItemAsObject()
-      
-      cnr.AddArray('S-R Polyfit', rDomainNode.GetID())
-      cnr.AddArray('S-R Data', rPointsNode.GetID())
-
-      #Setting properties on the chart
-      cnr.SetProperty('default', 'title', Node.GetName() + ' R-L')
-      cnr.SetProperty('default', 'xAxisLabel', 'S-I')
-      cnr.SetProperty('default', 'yAxisLabel', 'R-L')
-      
-      #Which chart to display
-      cvn.SetChartNodeID(cnr.GetID())
-      """
-      
-    return (SrPolynomial, SaPolynomial)
-   
-  def GetCurvewiseInterpointDistances(self, Node, (SrPolynomial, SaPolynomial)):
-    PointsPerCurve = 500
-    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
-    R = [Coords[i][0] for i in range(len(Coords))]
-    A = [Coords[i][1] for i in range(len(Coords))]
-    S = [Coords[i][2] for i in range(len(Coords))]
-    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
-   
-    # Distances along the polynomial to each landmark in the given dimension - first distance (1st point from nowehere) is 0
-    PointDistances = []
-    #priorS = sSpace[0]
-    sIndex = 1
-    
-    # Find points in sSpace corresponding to landmarks in both R and A dimension
-    for i, Landmark in enumerate(zip(R[:-1],A[:-1])):
-      CurveDistance = 0
-      PointDistances.append(0)
-      while sSpace[sIndex] > S[i+1]:
-        PriorS = sSpace[sIndex-1]
-        CurrentS = sSpace[sIndex]
-        PriorR = SrPolynomial(PriorS)
-        CurrentR = SrPolynomial(CurrentS)
-        PriorA = SaPolynomial(PriorS)
-        CurrentA = SaPolynomial(CurrentS)
-        PointDistances[i] += np.sqrt(((CurrentS- PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2))
-        sIndex += 1
-        
-    return PointDistances
-   
-  def EstimateMissingPoints(self, PointDistances):
-    # Estimates the number of missing points per suspiciously long interval
-    MissingPointPredictions = np.zeros(len(PointDistances))
-    MeanInterpointDistance = np.mean(PointDistances)
-    PointDistanceStd = np.std(PointDistances)
-    CandidateDistances = PointDistances
-   
-    # Rest of distance checking uses a lst good distance value; top of spine boundary we don't have one yet
-    if PointDistances[0] > MeanInterpointDistance + np.std(PointDistances):   # Top inter-point distance is usually small, being thoracic versus lumbar
-      # This condition indicates missing points at the top of the spine
-      SuspiciousDistance = PointDistances[0]
-      MissingPointsThisInterval = 1
-      SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
-      CandidateDistances = np.delete(PointDistances, [0])
-      CandidateDistances = np.insert(CandidateDistances, 0, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
-      MeanCandidateDistances = np.mean(CandidateDistances)
-
-      # Check how many points should be added to produce intervals of typical length
-      while SubIntervalDistance > MeanCandidateDistances:   # The sub interval distances seem to long, given the new average, for just one point to be missing
-        MissingPointsThisInterval += 1
-        SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
-        CandidateDistances = np.delete(PointDistances, [0])
-        CandidateDistances = np.insert(CandidateDistances, 0, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
-        MeanCandidateDistances = np.mean(CandidateDistances)
-      MissingPointPredictions[0] = MissingPointsThisInterval
-    
-    # ASSERT we are at the first apparently uninterrupted interval
-      
-    i = 1
-    PriorGoodDistance = CandidateDistances[0]   # First interval in CandidateDistances is either repaired from above boundary treatment, or never needed repair
-    while i < len(CandidateDistances)-1:
-      MissingPointsThisInterval = 0
-      if CandidateDistances[i] > 1.33 * PriorGoodDistance and CandidateDistances[i] > 1.33 * CandidateDistances[i+1]:
-        SuspiciousDistance = CandidateDistances[i]
-        MissingPointsThisInterval = 1
-        SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
-        CandidateDistances = np.delete(PointDistances, [i - (len(CandidateDistances) - len(MissingPointPredictions))])
-        CandidateDistances = np.insert(CandidateDistances, i, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
-        MeanCandidateDistances = np.mean(CandidateDistances)
-
-        # Check how many points should be added to produce intervals of typical length
-        while SubIntervalDistance > (1.33 * PriorGoodDistance) + 0.0*np.std(CandidateDistances) :   # The sub interval distances seem to long, given the new average, for just one point to be missing
-          MissingPointsThisInterval += 1
-          SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
-          CandidateDistances = np.delete(PointDistances, [i - (len(CandidateDistances) - len(MissingPointPredictions))])
-          CandidateDistances = np.insert(CandidateDistances, i, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
-          MeanCandidateDistances = np.mean(CandidateDistances)
-        MissingPointPredictions[i - (sum(MissingPointPredictions))] = MissingPointsThisInterval
-      else:
-        PriorGoodDistance = CandidateDistances[i]
-      i += 1 + MissingPointsThisInterval
-   
-    if PointDistances[-1] > 1.33*PriorGoodDistance:
-      # This condition indicates missing points at the bottom of the spine
-      SuspiciousDistance = PointDistances[-1]
-      MissingPointsThisInterval = 1
-      SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
-      CandidateDistances = np.delete(PointDistances, [-1])
-      CandidateDistances = np.insert(CandidateDistances, -1, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
-      MeanCandidateDistances = np.mean(CandidateDistances)
-
-      # Check how many points should be added to produce intervals of typical length
-      while SubIntervalDistance > MeanCandidateDistances - 0.25*np.std(CandidateDistances):   # The sub interval distances seem to long, given the new average, for just one point to be missing
-        MissingPointsThisInterval += 1
-        SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
-        CandidateDistances = np.delete(PointDistances, [-1])
-        CandidateDistances = np.insert(CandidateDistances, -1, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
-        MeanCandidateDistances = np.mean(CandidateDistances)
-      MissingPointPredictions[-1] = MissingPointsThisInterval
-    return MissingPointPredictions
-   
-  def CompleteNodeFromPredictions(self, Node, CurvewiseDistances, MissingPointPredictions, (SrPolynomial, SaPolynomial)):
-    PointsPerCurve = 500
-    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
-    R = [Coords[i][0] for i in range(len(Coords))]
-    A = [Coords[i][1] for i in range(len(Coords))]
-    S = [Coords[i][2] for i in range(len(Coords))]
-    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
-    
-    for i, Interval in enumerate(CurvewiseDistances):
-      MissingPointsRemaining = MissingPointPredictions[i]
-       
-      if MissingPointsRemaining > 0:
-        PointInsertionOffset = Interval / float(MissingPointsRemaining + 1.0)
-        # Find beginning of current interval we wish to fill in
-        sIndex = 1
-        PriorS = sSpace[sIndex-1]
-        CurrentS = sSpace[sIndex]
-   
-        # Find the beginning of the interval missing a point  (>= because we start at the top of thoracic and count down into lumbar)
-        while CurrentS >= S[i]:
-          PriorS = sSpace[sIndex-1]
-          CurrentS = sSpace[sIndex]
-          sIndex += 1
-        
-        NumImputations = 0
-        DistanceOffset = 0            # Polynomila fit curve-wise distance from last point before broken interval
-        while MissingPointsRemaining > 0:
-          while DistanceOffset < PointInsertionOffset * float(NumImputations + 1):
-            PriorS = sSpace[sIndex-1]
-            CurrentS = sSpace[sIndex]
-            PriorR = SrPolynomial(PriorS)
-            CurrentR = SrPolynomial(CurrentS)
-            PriorA = SaPolynomial(PriorS)
-            CurrentA = SaPolynomial(CurrentS)
-            DistanceOffset += np.sqrt(((CurrentS - PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2))
-            sIndex += 1
-          Coords = [CurrentR, CurrentA, CurrentS]
-          Node.AddFiducialFromArray(Coords)
-          NumImputations += 1
-          MissingPointsRemaining -= 1
-          
-  def SiLandmarkFrequencyAnalysis(self, Node, (SrPolynomial, SaPolynomial)):
-    PointsPerCurve = 500
-    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
-    R = [Coords[i][0] for i in range(len(Coords))]
-    A = [Coords[i][1] for i in range(len(Coords))]
-    S = [Coords[i][2] for i in range(len(Coords))]
-    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
-    
-    PointDistances = self.GetCurvewiseInterpointDistances(Node, (SrPolynomial, SaPolynomial))
-    
-    MissingPointPredictions = self.EstimateMissingPoints(PointDistances)
-
-    self.CompleteNodeFromPredictions(Node, PointDistances, MissingPointPredictions, (SrPolynomial, SaPolynomial))
-    
-    print Node.GetName(), ' PointDistances: ', PointDistances
-    print Node.GetName(), ' OmissionPredictions: ', MissingPointPredictions
-    print ""
-    
-    """
-    for i, IntervalPrediction in enumerate(MissingPointPredictions):
-      if IntervalPrediction == 1:     # Interval is missing a point between Landmark[i] and Landmark[i+1]
-        sIndex = 1
-        PriorS = sSpace[sIndex-1]
-        CurrentS = sSpace[sIndex]
-        
-        # Find the beginning of the interval missing a point  (>= because we start at the top of thoracic and count down into lumbar)
-        while CurrentS >= S[i]:
-          PriorS = sSpace[sIndex-1]
-          CurrentS = sSpace[sIndex]
-          sIndex += 1
-        # ASSERT PriorS == S[i]; PriorS is at beginning of interval, and CurrentS is one poitn past, ready to start measuring distance
-        
-        DistanceGuess = PointDistances[i] / 2.0
-        
-        DistanceOffset = 0            # Polynomila fit curve-wise distance from last point before broken interval
-        while DistanceOffset < DistanceGuess:
-          PriorS = sSpace[sIndex-1]
-          CurrentS = sSpace[sIndex]
-          PriorR = SrPolynomial(PriorS)
-          CurrentR = SrPolynomial(CurrentS)
-          PriorA = SaPolynomial(PriorS)
-          CurrentA = SaPolynomial(CurrentS)
-          DistanceOffset += np.sqrt(((CurrentS - PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2))
-          sIndex += 1
-        
-        # ASSERT we are at the point in the curve where we guess the point should be
-        Coords = [CurrentR, CurrentA, CurrentS]
-        Node.AddFiducialFromArray(Coords)
-    """
-
-  def CombineRepairedSides(self):
-    LeftPoints = [self.LeftMarkupsNode.GetMarkupPointVector(i,0) for i in range(self.LeftMarkupsNode.GetNumberOfFiducials())]
-    RightPoints = [self.RightMarkupsNode.GetMarkupPointVector(i,0) for i in range(self.RightMarkupsNode.GetNumberOfFiducials())]
-    AllPoints = LeftPoints + RightPoints
-    AllPointsSorted = sorted(AllPoints, key=lambda Coords: Coords[2])
-    #self.VerticallySortedPoints.reverse()
-    
-    RepairedNode = slicer.vtkMRMLMarkupsFiducialNode()
-    RepairedNode.SetName('RepairedLandmarks')
-    
-    for Landmark in AllPointsSorted:
-      RepairedNode.AddFiducialFromArray(Landmark)
-    
-    if slicer.util.getNode(RepairedNode.GetName()) != None:
-      slicer.mrmlScene.RemoveNode(slicer.util.getNode(RepairedNode.GetName()))
-    slicer.mrmlScene.AddNode(RepairedNode)
-    
-  def RepairNode(self):
-    self.ClassifyLeftRight()
-    (LeftSrPolynomial, LeftSaPolynomial) = self.PolyFit(self.LeftMarkupsNode)
-    self.SiLandmarkFrequencyAnalysis(self.LeftMarkupsNode, (LeftSrPolynomial, LeftSaPolynomial))
-    (RightSrPolynomial, RightSaPolynomial) = self.PolyFit(self.RightMarkupsNode)
-    self.SiLandmarkFrequencyAnalysis(self.RightMarkupsNode, (RightSrPolynomial, RightSaPolynomial))
-    
-    self.CombineRepairedSides()
-  

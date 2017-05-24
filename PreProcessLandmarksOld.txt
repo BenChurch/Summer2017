@@ -1,0 +1,422 @@
+def PolyFit(self, Node, Plot=False):    # Meant to fit polynomial to right or left sideed landmarks, returns polynomial coefficients
+    PointsPerCurve = 500
+    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
+    R = [Coords[i][0] for i in range(len(Coords))]
+    A = [Coords[i][1] for i in range(len(Coords))]
+    S = [Coords[i][2] for i in range(len(Coords))]
+    
+    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+
+    S_R_FitCoefs = np.polyfit(S, R, 5)
+    S_A_FitCoefs = np.polyfit(S, A, 4)
+    
+    SrPolynomial = np.poly1d(S_R_FitCoefs)
+    SaPolynomial = np.poly1d(S_A_FitCoefs)
+    
+    #print "SR fit:", SrPolynomial
+    #print "SA fit:", SaPolynomial
+    
+    if Plot:
+      OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
+      while OldCharts.GetItemAsObject(0) != None:
+        slicer.mrmlScene.RemoveNode(OldCharts.GetItemAsObject(0))
+        OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
+    
+      OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
+      while OldArrays.GetItemAsObject(0) != None:
+        slicer.mrmlScene.RemoveNode(OldArrays.GetItemAsObject(0))
+        OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
+        
+      
+      aDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      #aDomain = aDomainNode.GetArray()
+      #aDomain.SetNumberOfTuples(PointsPerCurve)
+      #aDomain.SetNumberOfComponents(2)
+      for i, s in enumerate(sSpace):
+        aDomainNode.AddXYValue(s, SaPolynomial(s), 0)
+        #aDomain.SetComponent(i, 0, s)
+        #aDomain.SetComponent(i, 1, SaPolynomial(s))
+        #aDomain.SetComponent(i, 2, 0)
+      
+      aPointsNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      #aPointsArray = aPointsNode.GetArray()
+      #aPointsArray.SetNumberOfTuples(len(A))
+      #aPointsArray.SetNumberOfComponents(2)
+      for i, (a, s) in enumerate(zip(A,S)):
+        aPointsNode.AddXYValue(s, a, 0)
+        #aPointsArray.SetComponent(i, 0, s)
+        #aPointsArray.SetComponent(i, 1, a)
+        #aPointsArray.SetComponent(i, 2, 0)
+      
+      # Creates chart view
+      LayoutNodeSet = slicer.mrmlScene.GetNodesByClass('vtkMRMLLayoutNode')
+      LayoutNodeSet.InitTraversal()
+      LayoutNode = LayoutNodeSet.GetNextItemAsObject()
+      LayoutNode.SetViewArrangement(24)
+      
+      # Get chart view node
+      ChartViewNodeSet = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartViewNode')
+      ChartViewNodeSet.InitTraversal()
+      ChartViewNode = ChartViewNodeSet.GetNextItemAsObject()
+      
+      # Create chart node
+      ChartNodeA = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
+      
+      ChartNodeA.AddArray('S-A Polyfit', aDomainNode.GetID())
+      ChartNodeA.AddArray('S-A Data', aPointsNode.GetID())
+
+      # Setting properties on the chart
+      ChartNodeA.SetProperty('default', 'title', Node.GetName() + ' A-P')
+      ChartNodeA.SetProperty('default', 'xAxisLabel', 'S-I')
+      ChartNodeA.SetProperty('default', 'yAxisLabel', 'A-P')
+      
+      # Which chart to display
+      ChartViewNode.SetChartNodeID(ChartNodeA.GetID())
+      
+      """
+      #Create chart node
+      cnr = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
+      
+      rSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+      rDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      rDomain = rDomainNode.GetArray()
+      rDomain.SetNumberOfTuples(PointsPerCurve)
+      rDomain.SetNumberOfComponents(2)
+      for i, s in enumerate(sSpace):
+        rDomain.SetComponent(i, 0, s)
+        rDomain.SetComponent(i, 1, SrPolynomial(s))
+        
+      rPointsNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      rPointsArray = rPointsNode.GetArray()
+      rPointsArray.SetNumberOfTuples(len(R))
+      rPointsArray.SetNumberOfComponents(2)
+      for i, (r, s) in enumerate(zip(R,S)):
+        rPointsArray.SetComponent(i, 0, s)
+        rPointsArray.SetComponent(i, 1, r)
+      
+      #LayoutNodeSet.InitTraversal()
+      #LayoutNode = LayoutNodeSet.GetNextItemAsObject()
+      #LayoutNode.SetViewArrangement(24)
+      #ChartViewNodeSet.InitTraversal()
+      #ChartViewNode = ChartViewNodeSet.GetNextItemAsObject()
+      
+      cnr.AddArray('S-R Polyfit', rDomainNode.GetID())
+      cnr.AddArray('S-R Data', rPointsNode.GetID())
+
+      #Setting properties on the chart
+      cnr.SetProperty('default', 'title', Node.GetName() + ' R-L')
+      cnr.SetProperty('default', 'xAxisLabel', 'S-I')
+      cnr.SetProperty('default', 'yAxisLabel', 'R-L')
+      
+      #Which chart to display
+      ChartViewNode.SetChartNodeID(cnr.GetID())
+      """
+      
+    return (SrPolynomial, SaPolynomial)
+   
+  def GetCurvewiseInterpointDistances(self, Node, (SrPolynomial, SaPolynomial)):
+    PointsPerCurve = 500
+    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
+    R = [Coords[i][0] for i in range(len(Coords))]
+    A = [Coords[i][1] for i in range(len(Coords))]
+    S = [Coords[i][2] for i in range(len(Coords))]
+    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+   
+    # Distances along the polynomial to each landmark in the given dimension
+    PointDistances = []
+    #priorS = sSpace[0]
+    sIndex = 1
+    
+    # Find points in sSpace corresponding to landmarks in both R and A dimension
+    CurveDistance = 0
+    for i, Landmark in enumerate(zip(R[:-1],A[:-1])):
+      CurrentIntervalLength = 0
+      while sSpace[sIndex] > S[i+1]:
+        PriorS = sSpace[sIndex-1]
+        CurrentS = sSpace[sIndex]
+        PriorR = SrPolynomial(PriorS)
+        CurrentR = SrPolynomial(CurrentS)
+        PriorA = SaPolynomial(PriorS)
+        CurrentA = SaPolynomial(CurrentS)
+        CurveIncrementDistance = np.sqrt(((CurrentS- PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2)) 
+        CurrentIntervalLength += CurveIncrementDistance
+        CurveDistance += CurveIncrementDistance
+        sIndex += 1
+      PointDistances.append((CurveDistance, CurrentIntervalLength))
+        
+    return PointDistances
+   
+  def EstimateMissingPoints(self, PointDistances):
+    # Estimates the number of missing points per suspiciously long interval
+    MissingPointPredictions = np.zeros(len(PointDistances))
+    MeanInterpointDistance = np.mean(PointDistances)
+    PointDistanceStd = np.std(PointDistances)
+    CandidateDistances = PointDistances
+   
+    # Rest of distance checking uses a lst good distance value; top of spine boundary we don't have one yet
+    if PointDistances[0] > MeanInterpointDistance + np.std(PointDistances):   # Top inter-point distance is usually small, being thoracic versus lumbar
+      # This condition indicates missing points at the top of the spine
+      SuspiciousDistance = PointDistances[0]
+      MissingPointsThisInterval = 1
+      SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
+      CandidateDistances = np.delete(PointDistances, [0])
+      CandidateDistances = np.insert(CandidateDistances, 0, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
+      MeanCandidateDistances = np.mean(CandidateDistances)
+
+      # Check how many points should be added to produce intervals of typical length
+      while SubIntervalDistance > MeanCandidateDistances:   # The sub interval distances seem to long, given the new average, for just one point to be missing
+        MissingPointsThisInterval += 1
+        SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
+        CandidateDistances = np.delete(PointDistances, [0])
+        CandidateDistances = np.insert(CandidateDistances, 0, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
+        MeanCandidateDistances = np.mean(CandidateDistances)
+      MissingPointPredictions[0] = MissingPointsThisInterval
+    
+    # ASSERT we are at the first apparently uninterrupted interval
+      
+    i = 1
+    PriorGoodDistance = CandidateDistances[0]   # First interval in CandidateDistances is either repaired from above boundary treatment, or never needed repair
+    while i < len(CandidateDistances)-1:
+      MissingPointsThisInterval = 0
+      if CandidateDistances[i] > 1.33 * PriorGoodDistance and CandidateDistances[i] > 1.33 * CandidateDistances[i+1]:
+        SuspiciousDistance = CandidateDistances[i]
+        MissingPointsThisInterval = 1
+        SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
+        CandidateDistances = np.delete(PointDistances, [i - (len(CandidateDistances) - len(MissingPointPredictions))])
+        CandidateDistances = np.insert(CandidateDistances, i, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
+        MeanCandidateDistances = np.mean(CandidateDistances)
+
+        # Check how many points should be added to produce intervals of typical length
+        while SubIntervalDistance > (1.33 * PriorGoodDistance) + 0.0*np.std(CandidateDistances) :   # The sub interval distances seem to long, given the new average, for just one point to be missing
+          MissingPointsThisInterval += 1
+          SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
+          CandidateDistances = np.delete(PointDistances, [i - (len(CandidateDistances) - len(MissingPointPredictions))])
+          CandidateDistances = np.insert(CandidateDistances, i, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
+          MeanCandidateDistances = np.mean(CandidateDistances)
+        MissingPointPredictions[i - (sum(MissingPointPredictions))] = MissingPointsThisInterval
+      else:
+        PriorGoodDistance = CandidateDistances[i]
+      i += 1 + MissingPointsThisInterval
+   
+    if PointDistances[-1] > 1.33*PriorGoodDistance:
+      # This condition indicates missing points at the bottom of the spine
+      SuspiciousDistance = PointDistances[-1]
+      MissingPointsThisInterval = 1
+      SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
+      CandidateDistances = np.delete(PointDistances, [len(PointDistances)-1])
+      CandidateDistances = np.insert(CandidateDistances, -1, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
+      MeanCandidateDistances = np.mean(CandidateDistances)
+
+      # Check how many points should be added to produce intervals of typical length
+      while SubIntervalDistance > MeanCandidateDistances - 0.25*np.std(CandidateDistances):   # The sub interval distances seem to long, given the new average, for just one point to be missing
+        MissingPointsThisInterval += 1
+        SubIntervalDistance = SuspiciousDistance / float(MissingPointsThisInterval + 1.0)
+        CandidateDistances = np.delete(PointDistances, [len(PointDistances)-1])
+        CandidateDistances = np.insert(CandidateDistances, -1, (MissingPointsThisInterval + 1) * [SubIntervalDistance])
+        MeanCandidateDistances = np.mean(CandidateDistances)
+      MissingPointPredictions[-1] = MissingPointsThisInterval
+    return MissingPointPredictions
+   
+  def CompleteNodeFromPredictions(self, Node, CurvewiseDistances, MissingPointPredictions, (SrPolynomial, SaPolynomial)):
+    PointsPerCurve = 500
+    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
+    R = [Coords[i][0] for i in range(len(Coords))]
+    A = [Coords[i][1] for i in range(len(Coords))]
+    S = [Coords[i][2] for i in range(len(Coords))]
+    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+    
+    for i, Interval in enumerate(CurvewiseDistances):
+      MissingPointsRemaining = MissingPointPredictions[i]
+       
+      if MissingPointsRemaining > 0:
+        PointInsertionOffset = Interval / float(MissingPointsRemaining + 1.0)
+        # Find beginning of current interval we wish to fill in
+        sIndex = 1
+        PriorS = sSpace[sIndex-1]
+        CurrentS = sSpace[sIndex]
+   
+        # Find the beginning of the interval missing a point  (>= because we start at the top of thoracic and count down into lumbar)
+        while CurrentS >= S[i]:
+          PriorS = sSpace[sIndex-1]
+          CurrentS = sSpace[sIndex]
+          sIndex += 1
+        
+        NumImputations = 0
+        DistanceOffset = 0            # Polynomila fit curve-wise distance from last point before broken interval
+        while MissingPointsRemaining > 0:
+          while DistanceOffset < PointInsertionOffset * float(NumImputations + 1):
+            PriorS = sSpace[sIndex-1]
+            CurrentS = sSpace[sIndex]
+            PriorR = SrPolynomial(PriorS)
+            CurrentR = SrPolynomial(CurrentS)
+            PriorA = SaPolynomial(PriorS)
+            CurrentA = SaPolynomial(CurrentS)
+            DistanceOffset += np.sqrt(((CurrentS - PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2))
+            sIndex += 1
+          Coords = [CurrentR, CurrentA, CurrentS]
+          Node.AddFiducialFromArray(Coords)
+          NumImputations += 1
+          MissingPointsRemaining -= 1
+          
+  def CurvewiseFrequencyAnalysis(self, Node, (SrPolynomial, SaPolynomial), Plot=False):
+    PointsPerCurve = 500
+    Coords = [Node.GetMarkupPointVector(i,0) for i in range(Node.GetNumberOfFiducials())]
+    R = [Coords[i][0] for i in range(len(Coords))]
+    A = [Coords[i][1] for i in range(len(Coords))]
+    S = [Coords[i][2] for i in range(len(Coords))]
+    sSpace = np.linspace(S[0], S[-1], PointsPerCurve)
+    
+    IntervalData = self.GetCurvewiseInterpointDistances(Node, (SrPolynomial, SaPolynomial))
+    IntervalDistances = [IntervalData[i][1] for i in range(len(IntervalData))]
+    
+    # Try fitting polynomial to relationship between total distance travelled down the spine to the inter-landmark distances
+    CumulativeDistance = 0
+    CumulativeCurveDistances = []
+    for i, Interval in enumerate(IntervalDistances):
+      CumulativeCurveDistances.append(CumulativeDistance + (Interval/2.0))
+      CumulativeDistance += Interval
+    
+    CurveSpace = np.linspace(0, CumulativeDistance, PointsPerCurve)
+    FrequencyCoeffs = np.polyfit(CumulativeCurveDistances, IntervalDistances, 2)
+    FrequencyPolynomial = np.poly1d(FrequencyCoeffs)
+    
+    MaxPolynomialError = 0
+    MaxErrorLocation = 0
+    AllIntervalErrors = []
+    for i, Interval in enumerate(IntervalDistances):
+      CurveDistanceFraction = CumulativeCurveDistances[i] / max(CurveSpace)
+      CurveSpaceIndex = int(CurveDistanceFraction * (len(CurveSpace))-1)
+      CurrentIntervalPolynomailError = FrequencyPolynomial(CurveSpace[CurveSpaceIndex]) - Interval
+      AllIntervalErrors.append(CurrentIntervalPolynomailError)
+      #print "Polynomial error for interval " + str(i) + ": ", CurrentIntervalPolynomailError, " at curve distance = ", CurveSpace[CurveSpaceIndex]
+      if abs(CurrentIntervalPolynomailError) > abs(MaxPolynomialError):
+        MaxPolynomialError = CurrentIntervalPolynomailError
+        MaxErrorLocation = CurveSpace[CurveSpaceIndex]
+        
+    #print AllIntervalErrors
+    #print "Max deviation: ", MaxPolynomialError, " at curveDistance = ", MaxErrorLocation
+    
+    if Plot:
+      OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
+      while OldCharts.GetItemAsObject(0) != None:
+        slicer.mrmlScene.RemoveNode(OldCharts.GetItemAsObject(0))
+        OldCharts = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartNode')
+    
+      OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
+      while OldArrays.GetItemAsObject(0) != None:
+        slicer.mrmlScene.RemoveNode(OldArrays.GetItemAsObject(0))
+        OldArrays = slicer.mrmlScene.GetNodesByClass('vtkMRMLDoubleArrayNode')
+     
+      # Array for the polynomial fit to the interval distances
+      CurveDomainNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      for c in CurveSpace:
+        CurveDomainNode.AddXYValue(c, FrequencyPolynomial(c), 0)
+        
+      # Array for the original interval distances
+      DistancePointsNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLDoubleArrayNode())
+      for (ID, CD) in (zip(IntervalDistances, CumulativeCurveDistances)):
+        DistancePointsNode.AddXYValue(CD, ID, 0)
+        
+      # Creates chart view
+      LayoutNodeSet = slicer.mrmlScene.GetNodesByClass('vtkMRMLLayoutNode')
+      LayoutNodeSet.InitTraversal()
+      LayoutNode = LayoutNodeSet.GetNextItemAsObject()
+      LayoutNode.SetViewArrangement(24)
+      
+      # Create chart node
+      ChartNode = slicer.mrmlScene.AddNode(slicer.vtkMRMLChartNode())
+
+      # Get chart view node
+      ChartViewNodes = slicer.mrmlScene.GetNodesByClass('vtkMRMLChartViewNode')
+      ChartViewNodes.InitTraversal()
+      ChartViewNode = ChartViewNodes.GetNextItemAsObject()
+      
+      ChartNode.AddArray('Interval Polyfit', CurveDomainNode.GetID())
+      ChartNode.AddArray('Interval Distance Data', DistancePointsNode.GetID())
+
+      # Setting properties on the chart
+      ChartNode.SetProperty('default', 'title', Node.GetName() + 'Curve interval distances')
+      ChartNode.SetProperty('default', 'xAxisLabel', 'Curve-wise distance from spine top')
+      ChartNode.SetProperty('default', 'yAxisLabel', 'Interval length')
+      
+      # Which chart to display
+      ChartViewNode.SetChartNodeID(ChartNode.GetID())
+    
+    print " "     # Empty line
+    print Node.GetName(), ' IntervalDistances: ', IntervalDistances
+    print Node.GetName(), " interval fit errors: ", AllIntervalErrors
+    print "Max abs fit error (", str(MaxPolynomialError), ") to interval stddev (", str(np.std(IntervalDistances)), "): ", MaxPolynomialError / np.std(IntervalDistances)
+    return (IntervalData, FrequencyPolynomial, AllIntervalErrors)
+    
+    #MissingPointPredictions = self.EstimateMissingPoints(IntervalDistances)
+
+    #self.CompleteNodeFromPredictions(Node, IntervalDistances, MissingPointPredictions, (SrPolynomial, SaPolynomial))
+    
+    #print Node.GetName(), ' OmissionPredictions: ', MissingPointPredictions
+    print ""
+    
+    """
+    for i, IntervalPrediction in enumerate(MissingPointPredictions):
+      if IntervalPrediction == 1:     # Interval is missing a point between Landmark[i] and Landmark[i+1]
+        sIndex = 1
+        PriorS = sSpace[sIndex-1]
+        CurrentS = sSpace[sIndex]
+        
+        # Find the beginning of the interval missing a point  (>= because we start at the top of thoracic and count down into lumbar)
+        while CurrentS >= S[i]:
+          PriorS = sSpace[sIndex-1]
+          CurrentS = sSpace[sIndex]
+          sIndex += 1
+        # ASSERT PriorS == S[i]; PriorS is at beginning of interval, and CurrentS is one poitn past, ready to start measuring distance
+        
+        DistanceGuess = IntervalDistances[i] / 2.0
+        
+        DistanceOffset = 0            # Polynomila fit curve-wise distance from last point before broken interval
+        while DistanceOffset < DistanceGuess:
+          PriorS = sSpace[sIndex-1]
+          CurrentS = sSpace[sIndex]
+          PriorR = SrPolynomial(PriorS)
+          CurrentR = SrPolynomial(CurrentS)
+          PriorA = SaPolynomial(PriorS)
+          CurrentA = SaPolynomial(CurrentS)
+          DistanceOffset += np.sqrt(((CurrentS - PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2))
+          sIndex += 1
+        
+        # ASSERT we are at the point in the curve where we guess the point should be
+        Coords = [CurrentR, CurrentA, CurrentS]
+        Node.AddFiducialFromArray(Coords)
+    """
+
+  def ComputeFitRMS(self, Data, Polynomial):
+    SumSquaredError = 0
+    for Datum in Data:
+      SumSquaredError += (Polynomial(Datum[0]) - Datum[1]) ** 2
+    MeanSquarredError = SumSquaredError / len(Data)
+    RMS = np.sqrt(MeanSquarredError)
+    return RMS
+    
+  def PredictOmissionsFromFrequencyFit(self, IntervalData, PolynomialFit, FrequencyPolynomialErrors):
+    OmissionPredictions = np.zeros(len(FrequencyPolynomialErrors))      # Will contain count for each interval indicating how many points seem mising
+    MeanFitError = np.mean(FrequencyPolynomialErrors)        # Should be about 0, because of +/- distribution
+    FitErrorStd = np.std(FrequencyPolynomialErrors)
+    
+    FrequencyFitRMS = self.ComputeFitRMS(IntervalData, PolynomialFit)
+    #for IntervalFitError in FrequencyPolynomialErrors:
+      
+    
+  def CombineRepairedSides(self):
+    LeftPoints = [self.LeftMarkupsNode.GetMarkupPointVector(i,0) for i in range(self.LeftMarkupsNode.GetNumberOfFiducials())]
+    RightPoints = [self.RightMarkupsNode.GetMarkupPointVector(i,0) for i in range(self.RightMarkupsNode.GetNumberOfFiducials())]
+    AllPoints = LeftPoints + RightPoints
+    AllPointsSorted = sorted(AllPoints, key=lambda Coords: Coords[2])
+    AllPointsSorted.reverse()
+    
+    RepairedNode = slicer.vtkMRMLMarkupsFiducialNode()
+    RepairedNode.SetName('RepairedLandmarks')
+    
+    for Landmark in AllPointsSorted:
+      RepairedNode.AddFiducialFromArray(Landmark)
+    
+    if slicer.util.getNode(RepairedNode.GetName()) != None:
+      slicer.mrmlScene.RemoveNode(slicer.util.getNode(RepairedNode.GetName()))
+    slicer.mrmlScene.AddNode(RepairedNode)

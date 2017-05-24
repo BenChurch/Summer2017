@@ -1,0 +1,554 @@
+﻿import os
+import unittest
+import vtk, qt, ctk, slicer
+from slicer.ScriptedLoadableModule import *
+import logging
+import numpy as np
+
+#
+# PreProcessLandmarks
+#
+
+class PreProcessLandmarks(ScriptedLoadableModule):
+  """Uses ScriptedLoadableModule base class, available at:
+  https://github.com/Slicer/Slicer/blob/master/Base/Python/slicer/ScriptedLoadableModule.py
+  """
+
+  def __init__(self, parent):
+    ScriptedLoadableModule.__init__(self, parent)
+    self.parent.title = "PreProcessLandmarks" # TODO make this more human readable by adding spaces
+    self.parent.categories = ["Scoliosis"]
+    self.parent.dependencies = []
+    self.parent.contributors = ["Ben Church - Queen's University, PerkLab"]
+    self.parent.helpText = """
+    This module can be used to extrapolate or interpolate incomplete scans of the
+    transverse processes"""
+    self.parent.acknowledgementText = """ """ # replace with organization, grant and thanks.
+
+#
+# PreProcessLandmarksWidget
+#
+
+class PreProcessLandmarksWidget(ScriptedLoadableModuleWidget):
+  """Uses ScriptedLoadableModuleWidget base class, available at:
+  https://github.com/Slicer/Slicer/blob/master/Base/Python/slicer/ScriptedLoadableModule.py
+  """
+
+  def setup(self):
+    ScriptedLoadableModuleWidget.setup(self)
+
+    # Instantiate and connect widgets ...
+
+    # User interface for incomplete landmark set repair
+    RepairInterface = ctk.ctkCollapsibleButton()
+    RepairInterface.text = "Markups node repair"
+    self.layout.addWidget(RepairInterface)
+    RepairInterfaceLayout = qt.QFormLayout(RepairInterface)
+    #RepairInterfaceLayout.collapsed = True
+    
+    # Dropdown list to select MarkupsNode for repair
+    self.RepairNodeSelector = slicer.qMRMLNodeComboBox()
+    self.RepairNodeSelector.nodeTypes = ["vtkMRMLMarkupsFiducialNode",]
+    self.RepairNodeSelector.selectNodeUponCreation = True
+    self.RepairNodeSelector.enabled  = True
+    self.RepairNodeSelector.addEnabled = True
+    self.RepairNodeSelector.noneEnabled = False
+    self.RepairNodeSelector.removeEnabled = True
+    self.RepairNodeSelector.renameEnabled = True
+    self.RepairNodeSelector.toolTip = "Choose the incomplete landmarks node to be repaired to completion"
+    RepairInterfaceLayout.addRow("Node to repair:", self.RepairNodeSelector)
+    self.RepairNodeSelector.setMRMLScene(slicer.mrmlScene)
+    
+    self.RepairNodeButton = qt.QPushButton("Repair landmarks node")
+    self.RepairNodeButton.toolTip = "Currently seperates right from left sided points"
+    RepairInterfaceLayout.addRow(self.RepairNodeButton)
+    
+    # Button connections
+    self.RepairNodeButton.connect('clicked(bool)', self.OnRepairButtonClicked)
+
+    # Reload module button
+    self.reloadButton = qt.QPushButton('Reload module')
+    RepairInterfaceLayout.addRow(self.reloadButton)
+
+    # connections
+    self.reloadButton.connect('clicked(bool)', self.OnReloadButton)
+    
+    # Add vertical spacer
+    self.layout.addStretch(1)
+
+  def cleanup(self):
+    pass
+
+  def OnRepairButtonClicked(self):
+    logic = PreProcessLandmarksLogic(self.RepairNodeSelector.currentNode())
+    logic.RepairNode()
+
+  def OnReloadButton(self):
+    slicer.util.reloadScriptedModule(slicer.moduleNames.PreProcessLandmarks)
+    
+#
+# PreProcessLandmarksLogic
+#
+
+class PreProcessLandmarksLogic(ScriptedLoadableModuleLogic):
+  class PatientTransverseProcesses:
+    def __init__(self, parent, Node):
+      self.ParentLogic = parent
+      # User definable parameters
+      self.NumMarkupsForRunningClassification = 6
+    
+      self.MarkupsNode = Node
+      self.LabelsCoords = [(self.MarkupsNode.GetNthFiducialLabel(i), self.MarkupsNode.GetMarkupPointVector(i,0)) for i in range(self.MarkupsNode.GetNumberOfFiducials())]
+      
+      PreExistingLeftNode = slicer.util.getNode(self.MarkupsNode.GetName() + "_Left")
+      if PreExistingLeftNode != None:
+        slicer.mrmlScene.RemoveNode(PreExistingLeftNode)
+      PreExistingRightNode = slicer.util.getNode(self.MarkupsNode.GetName() + "_Right")
+      if PreExistingRightNode != None:
+        slicer.mrmlScene.RemoveNode(PreExistingRightNode)
+        
+      self.LeftSide = self.ParentLogic.SpineSide((slicer.vtkMRMLMarkupsFiducialNode()))
+      self.LeftSide.MarkupsNode.SetName(self.MarkupsNode.GetName() + "_Left")
+      self.RightSide = self.ParentLogic.SpineSide((slicer.vtkMRMLMarkupsFiducialNode()))
+      self.RightSide.MarkupsNode.SetName(self.MarkupsNode.GetName() + "_Right")
+      
+      self.ClassifyLeftRight(self.NumMarkupsForRunningClassification)
+      
+      
+    def SortPointsVertically(self):
+      self.MarkupsNode.RemoveAllMarkups()
+      self.LabelsCoords = sorted(self.LabelsCoords, key=lambda Tup: -1*Tup[1][2])
+      for i, Markup in enumerate(self.LabelsCoords):
+        self.MarkupsNode.AddFiducialFromArray(Markup[1])
+        self.MarkupsNode.SetNthFiducialLabel(i, Markup[0])
+      
+    def ClassifyLeftRight(self, WindowSize):  
+      self.SortPointsVertically()
+      SortedPointsLeftVotes = len(self.LabelsCoords) * [0]
+      SortedPointsRightVotes = len(self.LabelsCoords) * [0]
+      for i in range(0, len(self.LabelsCoords)-WindowSize+1):
+        MarkupsWindow = self.LabelsCoords[i:i+WindowSize]
+        #print MarkupsWindow
+        NormalizedWindow = self.AnisotrpoicNormalization(MarkupsWindow)
+        (KmLabels, KmCentroids) = self.KMeans(NormalizedWindow, 2)
+
+        # If KmLabel == 0 indicates a left-side point
+        if KmCentroids[0][0] < KmCentroids[1][0]:
+          for j, Label in enumerate(KmLabels):
+            if Label == 0:
+              SortedPointsLeftVotes[i + j] = SortedPointsLeftVotes[i + j] + 1
+            else:
+              SortedPointsRightVotes[i + j] = SortedPointsRightVotes[i + j] + 1
+        else: # If KmLabel == 0 indicates a right-side point
+          for j, Label in enumerate(KmLabels):
+            #print i, j
+            if Label == 0:
+              SortedPointsRightVotes[i + j] = SortedPointsRightVotes[i + j] + 1
+            else:
+              SortedPointsLeftVotes[i + j] = SortedPointsLeftVotes[i + j] + 1
+
+      #self.LeftSide.MarkupsNode.RemoveAllMarkups()
+      #self.RightSide.MarkupsNode.RemoveAllMarkups()
+      
+      NewLeftSide = slicer.vtkMRMLMarkupsFiducialNode()
+      NewLeftSide.SetName(self.MarkupsNode.GetName() + "_Left")
+      slicer.mrmlScene.AddNode(NewLeftSide)
+      NewRightSide = slicer.vtkMRMLMarkupsFiducialNode()
+      NewRightSide.SetName(self.MarkupsNode.GetName() + "_Right")
+      slicer.mrmlScene.AddNode(NewRightSide)
+
+      
+      for i, UnclassifiedPoint in enumerate(self.LabelsCoords):
+        #OriginalPointIndex = self.LabelsCoords.index(UnclassifiedPoint)
+        #OriginalPoint = self.LabelsCoords[OriginalPointIndex]
+        if SortedPointsLeftVotes[i] > SortedPointsRightVotes[i]:
+          NewLeftSide.AddFiducialFromArray(UnclassifiedPoint[1])
+          NewLeftSide.SetNthFiducialLabel(NewLeftSide.GetNumberOfFiducials()-1, UnclassifiedPoint[0] + '_Left')
+        else:
+          NewRightSide.AddFiducialFromArray(UnclassifiedPoint[1])
+          NewRightSide.SetNthFiducialLabel(NewRightSide.GetNumberOfFiducials()-1, UnclassifiedPoint[0] + '_Right')
+
+        self.LeftSide = self.ParentLogic.SpineSide(NewLeftSide)
+        self.RightSide = self.ParentLogic.SpineSide(NewRightSide)
+      
+    def AnisotrpoicNormalization(self, PointSet):
+      # Start by finding top and bottom points of spine for verticle normalization
+      SetRight = -10000
+      SetLeft = 10000
+      SetFront = -10000
+      SetBack = 10000
+      SetTop = -10000
+      SetBottom = 10000
+
+      for Point in PointSet:
+        Coords  = Point[1]
+        if Coords[0] < SetLeft:
+          SetLeft = Coords[0]
+        if Coords[0] > SetRight:
+          SetRight = Coords[0]
+        if Coords[1] < SetBack:
+          SetBack = Coords[1]
+        if Coords[1] > SetFront:
+          SetFront = Coords[1]
+        if Coords[2] > SetTop:
+          SetTop = Coords[2]
+        if Coords[2] < SetBottom:
+          SetBottom = Coords[2]
+        
+      SetHeight = SetTop - SetBottom
+      SetWidth = SetRight - SetLeft
+      SetDepth = SetFront - SetBack
+      
+      # (Re) initialize normalized point list
+      NormalizedPoints = len(PointSet) * [0]
+      
+      # Normalize S-I dimension to R-L scale
+      for i, Point in enumerate(PointSet):
+        Coords = Point[1]
+        NormalizedPoints[i] = np.array([Coords[0], (Coords[1]) * (SetWidth / (SetDepth * 3.0)), (Coords[2]) * (SetWidth / (SetHeight * 2.0))])
+      return NormalizedPoints
+    
+    def ShouldStopKMeans(self, oldCentroids, Centroids, iterations):
+      MaxIterations = 500
+      StoppingDelta = 0.05
+      #print oldCentroids, Centroids
+      if iterations > MaxIterations: return True
+      if iterations == 0:
+        return False
+      for C in range(len(oldCentroids)):
+        #print oldCentroids[C], Centroids[C]
+        if np.linalg.norm(oldCentroids[C] - Centroids[C]) < StoppingDelta:
+          return True
+      return False
+
+    def GetKMeansLabels(self, DataSet, Centroids, Labels):
+      for i, Coords in enumerate(DataSet):
+        #PointCentroidDistance = np.linalg.norm(Coords - Centroids[0])
+        minDist = 1000000
+        Labels[i] = 0
+        for j, CentroidVector in enumerate(Centroids):
+          #print Coords, CentroidVector#, np.linalg.norm(Coords - CentroidVector)
+          PointCentroidDistance = np.linalg.norm(Coords - CentroidVector)
+          if PointCentroidDistance < minDist:
+            minDist = PointCentroidDistance
+            Labels[i] = j
+      return Labels
+
+    def GetCentroids(self, DataSet, Labels, k):
+      Centroids = []
+      #print Labels
+      for C in range(k):    # For each centroid
+        Centroid = np.random.uniform() * np.ones(len(DataSet[0]))    # Each centroid with as many dimensions as the data
+        
+        for i, Coords in enumerate(DataSet): # Take each data point contributing to the centroid into consideration
+          if Labels[i] == C:                    # if it belongs to the current centroid
+            for dim in range(len(Centroid)):
+              Centroid[dim] += Coords[dim]
+              
+        for dim in range(len(Centroid)):
+          Centroid[dim] = Centroid[dim] / np.count_nonzero(Labels == C)
+        Centroids.append(Centroid)
+      return Centroids
+
+    def KMeans(self, DataSet, k=2):   # Expects DataSet as list of (Label, np.array[R,A,S]) tuples, uses k=2 by default for left and right sides
+      DataSetLabels = np.zeros(len(DataSet))
+      for i in range(len(DataSetLabels)):
+        DataSetLabels[i] = int(round(np.random.uniform()))
+      # Initialize centroids
+      numFeatures = len(DataSet[0])
+      Centroids = k * [0]
+      # Try initializing one centroid on each side
+      Centroids[0] = np.array([min([i[0] for i in DataSet]),0,0])
+      Centroids[1] = np.array([max([i[0] for i in DataSet]),0,0])
+      
+    # Initialize book keeping variables
+      iterations = 0
+      oldCentroids = k * [0]
+      for Cent in range(k):
+        oldCentroids[Cent] = np.array(numFeatures * [np.random.uniform()])
+
+      # Run the k-means algorithm
+      while not self.ShouldStopKMeans(oldCentroids, Centroids, iterations):
+        oldCentroids = Centroids
+        iterations += 1
+        
+        DataSetLabels = self.GetKMeansLabels(DataSet, Centroids, DataSetLabels)
+        Centroids = self.GetCentroids(DataSet, DataSetLabels, k)
+        #print Centroids
+      return (DataSetLabels, Centroids)
+
+  class SpineSide:
+    def __init__(self, Node):
+      self.MarkupsNode = Node
+      self.LabelsCoords = [(self.MarkupsNode.GetNthFiducialLabel(i), self.MarkupsNode.GetMarkupPointVector(i,0)) for i in range(self.MarkupsNode.GetNumberOfFiducials())]
+      #print self.LabelsCoords
+      self.PointsPerPolynomialCurve = 500
+      #self.ImputationErrorImprovementThreshold = 0.05
+     
+    def OrderPointsSuperiorToInferior(self):
+      self.LabelsCoords = [(self.MarkupsNode.GetNthFiducialLabel(i), self.MarkupsNode.GetMarkupPointVector(i,0)) for i in range(self.MarkupsNode.GetNumberOfFiducials())]
+      self.MarkupsNode.RemoveAllMarkups()
+      self.LabelsCoords = sorted(self.LabelsCoords, key=lambda Tup: -1*Tup[1][2])
+      for i, Markup in enumerate(self.LabelsCoords):
+        self.MarkupsNode.AddFiducialFromArray(Markup[1])
+        self.MarkupsNode.SetNthFiducialLabel(i, Markup[0])
+     
+    def CoordsPolyFit(self):
+      #Coords = [self.MarkupsNode.GetMarkupPointVector(i,0) for i in range(self.MarkupsNode.GetNumberOfFiducials())]
+      #print Coords
+      R = [self.LabelsCoords[i][1][0] for i in range(len(self.LabelsCoords))]
+      A = [self.LabelsCoords[i][1][1] for i in range(len(self.LabelsCoords))]
+      S = [self.LabelsCoords[i][1][2] for i in range(len(self.LabelsCoords))]
+      sSpace = np.linspace(S[0], S[-1], self.PointsPerPolynomialCurve)
+
+      # The degrees of these polynomials should not be hard coded
+      S_R_FitCoefs = np.polyfit(S, R, 5)
+      S_A_FitCoefs = np.polyfit(S, A, 4)
+      
+      SrPolynomial = np.poly1d(S_R_FitCoefs)
+      SaPolynomial = np.poly1d(S_A_FitCoefs)
+  
+      return (SrPolynomial, SaPolynomial)
+      
+    def GetCurvewiseInterpointDistances(self, SrPolynomial, SaPolynomial):
+      #Coords = [self.MarkupsNode.GetMarkupPointVector(i,0) for i in range(self.MarkupsNode.GetNumberOfFiducials())]
+      R = [self.LabelsCoords[i][1][0] for i in range(len(self.LabelsCoords))]
+      A = [self.LabelsCoords[i][1][1] for i in range(len(self.LabelsCoords))]
+      S = [self.LabelsCoords[i][1][2] for i in range(len(self.LabelsCoords))]
+      sSpace = np.linspace(S[0], S[-1], self.PointsPerPolynomialCurve)
+     
+      # Distances along the polynomial to each landmark in the given dimension
+      PointDistances = []
+      #priorS = sSpace[0]
+      sIndex = 1
+      
+      # Find points in sSpace corresponding to landmarks in both R and A dimension
+      CurveDistance = 0
+      for i, Landmark in enumerate(zip(R[:-1],A[:-1])):
+        CurrentIntervalLength = 0
+        while sIndex < self.PointsPerPolynomialCurve and sSpace[sIndex] > S[i+1]:
+          PriorS = sSpace[sIndex-1]
+          CurrentS = sSpace[sIndex]
+          PriorR = SrPolynomial(PriorS)
+          CurrentR = SrPolynomial(CurrentS)
+          PriorA = SaPolynomial(PriorS)
+          CurrentA = SaPolynomial(CurrentS)
+          CurveIncrementDistance = np.sqrt(((CurrentS - PriorS)**2) + ((CurrentR - PriorR)**2) + ((CurrentA - PriorA)**2)) 
+          CurrentIntervalLength += CurveIncrementDistance
+          CurveDistance += CurveIncrementDistance
+          sIndex += 1
+        PointDistances.append((CurveDistance, CurrentIntervalLength))
+          
+      return PointDistances
+      
+    def FrequencyPolyFit(self, IntervalData):
+      IntervalDistances = [IntervalData[i][1] for i in range(len(IntervalData))]
+      
+      # Try fitting polynomial to relationship between total distance travelled down the spine to the inter-landmark distances
+      CumulativeDistance = 0
+      CumulativeCurveDistances = []
+      for i, Interval in enumerate(IntervalDistances):
+        CumulativeCurveDistances.append(CumulativeDistance + (Interval/2.0))
+        CumulativeDistance += Interval
+      
+      CurveSpace = np.linspace(0, CumulativeDistance, self.PointsPerPolynomialCurve)
+      FrequencyCoeffs = np.polyfit(CumulativeCurveDistances, IntervalDistances, 2)
+      FrequencyPolynomial = np.poly1d(FrequencyCoeffs)
+      
+      return FrequencyPolynomial
+      
+    def GetPolyfitErrors(self, Data, Polynomial):
+      FitErrors = []
+      for Datum in Data:
+        PolyPrediction = Polynomial(Datum[0])
+        PredictionError = Datum[1] - PolyPrediction
+        FitErrors.append(PredictionError)
+      return FitErrors
+  
+    def GetPolyfitRMS(self, FitErrors):
+      if len(FitErrors) == 0:
+        print "Computing RMS error of empty error set - returning 0"
+        return 0
+      else:
+        SumSquaredError = sum([Error**2 for Error in FitErrors])
+        RMS = np.sqrt(SumSquaredError)
+        print RMS
+        return RMS
+        
+    def PredictAndImputeOmissions(self):
+      (SrPolynomial, SaPolynomial) = self.CoordsPolyFit()
+      
+      print ""
+      print SrPolynomial
+      
+      SrFirstDeriv = SrPolynomial.deriv()
+      SrSecondDeriv = SrFirstDeriv.deriv()        # Used to determine curvature, curvature needed to estimte expected interval length relative to mean
+      
+      print ""
+      print SrFirstDeriv
+      
+      print ""
+      print SrSecondDeriv
+      
+      CurvewiseInterpointData = self.GetCurvewiseInterpointDistances(SrPolynomial, SaPolynomial)
+      CurvewiseInterpointDistances = [Data[1] for Data in CurvewiseInterpointData]
+      CurvewiseFrequencyPolynomial = self.FrequencyPolyFit(CurvewiseInterpointData)
+      
+      FrequencyFitErrors = self.GetPolyfitErrors(CurvewiseInterpointData, CurvewiseFrequencyPolynomial)
+      AbsoluteErrors = [abs(Error) for Error in FrequencyFitErrors]
+      TentativeFitRMS = self.GetPolyfitRMS(FrequencyFitErrors)
+      
+      
+      # Create copy of original node for roll-back since functions modify SpineSide class' MarkupsNode
+      OriginalNode = slicer.mrmlScene.CopyNode(self.MarkupsNode)
+      #print OriginalNode.GetName(), 'Abs FrequencyFitErrors: ', AbsoluteErrors
+      #print "RMS = ", TentativeFitRMS
+      ImputingPoints = True
+      
+      while ImputingPoints:
+        for i, IntervalMeasrure in enumerate(FrequencyFitErrors):
+          if IntervalMeasrure > 2*np.mean(AbsoluteErrors):
+            ApparentOmissionCount = 1
+            FitImproving = True
+            #NewCurvewiseDistances = CurvewiseInterpointDistances
+            NewSrPolynomial = SrPolynomial
+            NewSaPolynomial = SaPolynomial
+            while FitImproving:
+              FitImproving = False
+              self.ImputeMarkups(CurvewiseInterpointDistances, i, ApparentOmissionCount, NewSrPolynomial, NewSaPolynomial, CurvewiseFrequencyPolynomial)
+              NewCurvewiseData = self.GetCurvewiseInterpointDistances(NewSrPolynomial, NewSaPolynomial)
+              NewCurvewiseDistances = [Data[1] for Data in NewCurvewiseData]           
+              # self.MarkupsNode now has tentative imputations
+              (NewSrPolynomial, NewSaPolynomial) = self.CoordsPolyFit()
+              #NewFrequencyPolynomial = self.FrequencyPolyFit(NewCurvewiseData)
+              NewFrequencyFitErrors = self.GetPolyfitErrors(NewCurvewiseData, CurvewiseFrequencyPolynomial)
+              NewRMS = self.GetPolyfitRMS(NewFrequencyFitErrors)
+              DeltaRMS = NewRMS - TentativeFitRMS
+              print "Imputations: " + str(ApparentOmissionCount) + "  - deltaRMS: " + str(DeltaRMS)
+              if DeltaRMS < 0:      # If the latest point added made the fit better
+                FitImproving = True
+                TentativeFitRMS = NewRMS
+                ApparentOmissionCount += 1
+              slicer.mrmlScene.RemoveNode(self.MarkupsNode)
+              self.MarkupsNode = slicer.mrmlScene.CopyNode(OriginalNode)   # Restore original state to see what happens if more points are added
+            # ASSERT that optimal TentativeFitRMS occurs with (ApparentOmissionCount - 1) points added
+            
+            self.ImputeMarkups(CurvewiseInterpointDistances, i, ApparentOmissionCount-1, SrPolynomial, SaPolynomial, CurvewiseFrequencyPolynomial)
+            slicer.mrmlScene.RemoveNode(OriginalNode)
+            OriginalNode = slicer.mrmlScene.CopyNode(self.MarkupsNode)
+            
+            (SrPolynomial, SaPolynomial) = self.CoordsPolyFit()
+            CurvewiseInterpointData = self.GetCurvewiseInterpointDistances(SrPolynomial, SaPolynomial)
+            CurvewiseInterpointDistances = [Data[1] for Data in CurvewiseInterpointData]
+            CurvewiseFrequencyPolynomial = self.FrequencyPolyFit(CurvewiseInterpointData)
+            
+            FrequencyFitErrors = self.GetPolyfitErrors(CurvewiseInterpointData, CurvewiseFrequencyPolynomial)
+            AbsoluteErrors = [abs(Error) for Error in FrequencyFitErrors]
+            TentativeFitRMS = self.GetPolyfitRMS(FrequencyFitErrors)
+            
+            ImputingPoints = True
+            break
+        slicer.mrmlScene.RemoveNode(OriginalNode)
+        ImputingPoints = False
+      
+    def ImputeMarkups(self, IntervalLengths, IntervalIndex, NumNewPoints, SrPolynomial, SaPolynomial, FrequencyPolynomial): # Returns a node with NumNewPoints points added on the curve in the specified interval, based on polynomial interpolation
+      print "Interval index: " + str(IntervalIndex) + " - NumNewPoints: " + str(NumNewPoints)
+      CurveSpace = np.linspace(0, sum(IntervalLengths), self.PointsPerPolynomialCurve)
+      SubIntervalLength = IntervalLengths[IntervalIndex] / float(NumNewPoints + 1)
+      RunningLength = 0
+      PointsRemaining = NumNewPoints
+      CurveStartDistance = sum(IntervalLengths[:IntervalIndex])
+      CurveSpaceIndex = 0
+      while CurveSpace[CurveSpaceIndex] < CurveStartDistance and CurveSpaceIndex < len(CurveSpace):
+        CurveSpaceIndex += 1
+      if CurveSpaceIndex == len(CurveSpace):
+        print "Error - could not find interval to impute landmarks"
+        print " Results invalid"
+        return 
+        
+      # ASSERT CurveSpace[CurveSpaceIndex] == start of interval of interest
+      IntervalStartCoords = self.MarkupsNode.GetMarkupPointVector(IntervalIndex,0)
+      IntervalEndCoords = self.MarkupsNode.GetMarkupPointVector(IntervalIndex+1,0)
+      sSpaceLocations = np.linspace(IntervalStartCoords[2], IntervalEndCoords[2], NumNewPoints+2)
+      for NewPointSCoord in sSpaceLocations[1:-1]:
+        NewPointCoords = [SrPolynomial(NewPointSCoord), SaPolynomial(NewPointSCoord), NewPointSCoord]
+        self.MarkupsNode.AddFiducialFromArray(NewPointCoords)
+      self.OrderPointsSuperiorToInferior()
+      #return Node
+
+  def __init__(self, Markups):
+    #  Instantiation of PatientModel here performs initial left-right classification into self.PatientModel.LeftSide etc...
+    self.PatientModel = self.PatientTransverseProcesses(self, Markups)
+    
+  def RepairNode(self):
+    
+    LeftSide = self.PatientModel.LeftSide
+    LeftSide.OrderPointsSuperiorToInferior()
+    LeftSide.PredictAndImputeOmissions()
+    
+    RightSide = self.PatientModel.RightSide
+    """
+    (LeftSrPolynomial, LeftSaPolynomial) = self.PolyFit(self.LeftMarkupsNode)
+    (RightSrPolynomial, RightSaPolynomial) = self.PolyFit(self.RightMarkupsNode)
+    
+    (LeftIntervalData, LeftCurveFrequencyPolynomial, LeftFrequencyFitErrors) = self.CurvewiseFrequencyAnalysis(self.LeftMarkupsNode, (LeftSrPolynomial, LeftSaPolynomial), Plot=True)
+    (RightIntervalData, RightFrequencyPolynomial, RightFrequencyFitErrors) = self.CurvewiseFrequencyAnalysis(self.RightMarkupsNode, (RightSrPolynomial, RightSaPolynomial))
+    
+    self.PredictOmissionsFromFrequencyFit(LeftIntervalData, LeftCurveFrequencyPolynomial, LeftFrequencyFitErrors)
+    
+    self.CombineRepairedSides()
+    """
+
+class PreProcessLandmarksTest(ScriptedLoadableModuleTest):
+  """
+  This is the test case for your scripted module.
+  Uses ScriptedLoadableModuleTest base class, available at:
+  https://github.com/Slicer/Slicer/blob/master/Base/Python/slicer/ScriptedLoadableModule.py
+  """
+
+  def setUp(self):
+    """ Do whatever is needed to reset the state - typically a scene clear will be enough.
+    """
+    slicer.mrmlScene.Clear(0)
+
+  def runTest(self):
+    """Run as few or as many tests as needed here.
+    """
+    self.setUp()
+    self.test_PreProcessLandmarks1()
+
+  def test_PreProcessLandmarks1(self):
+    """ Ideally you should have several levels of tests.  At the lowest level
+    tests should exercise the functionality of the logic with different inputs
+    (both valid and invalid).  At higher levels your tests should emulate the
+    way the user would interact with your code and confirm that it still works
+    the way you intended.
+    One of the most important features of the tests is that it should alert other
+    developers when their changes will have an impact on the behavior of your
+    module.  For example, if a developer removes a feature that you depend on,
+    your test should break so they know that the feature is needed.
+    """
+
+    self.delayDisplay("Starting the test")
+    #
+    # first, get some data
+    #
+    import urllib
+    downloads = (
+        ('http://slicer.kitware.com/midas3/download?items=5767', 'FA.nrrd', slicer.util.loadVolume),
+        )
+
+    for url,name,loader in downloads:
+      filePath = slicer.app.temporaryPath + '/' + name
+      if not os.path.exists(filePath) or os.stat(filePath).st_size == 0:
+        logging.info('Requesting download %s from %s...\n' % (name, url))
+        urllib.urlretrieve(url, filePath)
+      if loader:
+        logging.info('Loading %s...' % (name,))
+        loader(filePath)
+    self.delayDisplay('Finished with download and loading')
+
+    volumeNode = slicer.util.getNode(pattern="FA")
+    logic = PreProcessLandmarksLogic()
+    self.assertIsNotNone( logic.hasImageData(volumeNode) )
+    self.delayDisplay('Test passed!')
