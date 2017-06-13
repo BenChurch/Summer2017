@@ -20,6 +20,9 @@ include(${Slicer_USE_FILE})
 # Extension modules
 add_subdirectory(ModelToPatientRegistration)
 add_subdirectory(PreProcessLandmarks)
+add_subdirectory(DegradeTransverseProcesses)
+add_subdirectory(ExtendSpine)
+add_subdirectory(CenterAndNormalizeLandmarks)
 ## NEXT_MODULE
 
 #-----------------------------------------------------------------------------

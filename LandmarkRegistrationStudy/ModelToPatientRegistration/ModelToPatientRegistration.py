@@ -298,7 +298,7 @@ class ModelToPatientRegistrationLogic:
     self.GlobalVertebralScalingFactor = 30       # Distance (mm) in anterior direction to duplicate fiducial points for registration accuracy
   
   class Patient:
-    def __init__(self, Parent, LandmarksNode, RegistrationPointsNode, ScalePointsNode=None):    # Parent is ModelToPatientRegistrationLogic class
+    def __init__(self, ParentLogic, LandmarksNode, RegistrationPointsNode, ScalePointsNode=None):
       import numpy as np
       # Sort landmarks, left to right, superior to inferior, into a new node
       self.RawLandmarksNode = LandmarksNode     # 'Raw' meaning may be missing points, or be out of order
@@ -317,7 +317,7 @@ class ModelToPatientRegistrationLogic:
       self.AnchorOffsetScaleFactors = []
       self.AnchorOffsetDirectionVectors = []
       
-      Parent.ComputeOffsetUnitVectors(self)
+      ParentLogic.ComputeOffsetUnitVectors(self)
       
       self.RegistrationPointsNode = RegistrationPointsNode                 # Will contain sorted landmarks and anchor points, in that order
       
