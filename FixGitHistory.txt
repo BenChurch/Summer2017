@@ -1,3 +1,0 @@
-git filter-branch --prune-empty -d C:/Users/church/Documents/TempGitFix \
-  --index-filter "git rm --cached -f --ignore-unmatch spineultrasound/.svn/*" \
-  --tag-name-filter cat -- --all
