@@ -1,9 +1,8 @@
 import os
 import unittest
-import vtk, qt, ctk, slicer
+import vtk, qt, ctk, slicer, numpy
 from slicer.ScriptedLoadableModule import *
 import logging
-import numpy as np
 
 #
 # ExtendSpine
