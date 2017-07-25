@@ -1,0 +1,1 @@
+curl https://en.wikipedia.org/wiki/List_of_sovereign_states > AllStates.html
