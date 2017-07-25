@@ -20,8 +20,20 @@ class Interface(QWidget):
     from subprocess import Popen
     p = Popen(r"WikiHtmlGrabber.bat")
     stdout, stderr = p.communicate()
+    
+  def ReadInWikiTable(self):
+    from pyquery import PyQuery as pq
+    from lxml import etree
+    import urllib
+    #d = pq("<html></html>")
+    #d = pq(etree.fromstring("<html></html>"))
+    d = pq(url="https://en.wikipedia.org/wiki/List_of_sovereign_states", opeer=lambda url, **kw: urlopen(url).read())
+    d('table').filter('.sortable wikitable')
+    #d = pq(filename=AllStatesHtmlFileName, encoding="UTF-8")
+    
   
 ####### Main program #######
 MyInterface = Interface()
-MyInterface.WriteBatForDataUpdate()
-MyInterface.ExecBatForDataUpdate()
+#MyInterface.WriteBatForDataUpdate()
+#MyInterface.ExecBatForDataUpdate()
+MyInterface.ReadInWikiTable()
